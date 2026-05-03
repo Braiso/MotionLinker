@@ -13,8 +13,21 @@
 										codeBehind="MotionLinker.CodeBehind,MotionLinker.dll"
 										canBeSimulated="true">
 			<Properties>
-				<DynamicProperty name="SourceController" valueType="System.String" value="4600-116551_CR1"></DynamicProperty>
-				<DynamicProperty name="TargetController" valueType="System.String" value="4600-116552_CR2"></DynamicProperty>
+				<DynamicProperty 
+					name="SourceController"
+					valueType="System.String"
+					value="4600-116551_CR1"
+					description="Controller source of the movement"/>
+				<DynamicProperty 
+					name="TargetController"
+					valueType="System.String"
+					value="4600-116552_CR2"
+					description="Controller target of the movement"/>
+				<DynamicProperty
+					name="Cartesian"
+					valueType="System.Boolean"
+					value="false"
+					description="Enable Cartesian linking instead of joint linking"/>
 			</Properties>
 			<Bindings>
 			</Bindings>

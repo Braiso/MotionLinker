@@ -91,9 +91,8 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="CodeBehind.cs" />
-    <Compile Include="ControllerEvents.cs" />
     <Compile Include="ControllerHelper.cs" />
-    <Compile Include="JointMirror.cs" />
+    <Compile Include="MechanismData.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
   <ItemGroup>
@@ -102,6 +101,9 @@
     <None Include="MotionLinker.en.xml" />
     <None Include="MotionLinker.png" />
     <None Include="packages.config" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include=".gitignore" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
   <!-- To modify your build process, add your task inside one of the targets below and uncomment it. 

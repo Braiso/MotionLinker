@@ -32,9 +32,7 @@ namespace MotionLinker
     public class CodeBehind : SmartComponentCodeBehind
     {
 
-        // Marca de primer arranque evita "excepcion controller not response"
-        // Caso raro en pruebas con controladores offline
-        private Dictionary<Controller, bool> _controllerRunning = new Dictionary<Controller, bool>();
+        private bool _logging = false;
 
         // Secuencia de simulacion
         // 1. Llama OnSimulationStep()
@@ -50,7 +48,7 @@ namespace MotionLinker
         //     Simulated component.
         public override void OnSimulationStart(SmartComponent component)
         {
-            Logger.AddMessage(new LogMessage("Begin OnSimulationStart Event", "MotionLinker"));
+            if (_logging) Logger.AddMessage(new LogMessage("Simulation Start", "MotionLinker"));
             component.StateCache.Clear();
 
             #region Propiedades de entrada y validacion minima
@@ -59,6 +57,18 @@ namespace MotionLinker
 
             // Controlador Target
             string ctrlTarget = component.Properties["TargetController"]?.Value as string;
+
+            // Tipo de sincronizacion
+            bool cartesian = false;
+            try
+            {
+                cartesian = Convert.ToBoolean(component.Properties["Cartesian"].Value);
+            }
+            catch (Exception ex) 
+            {
+                Logger.AddMessage(new LogMessage("Error reading Cartesian mode property", ex.Message,"MotionLinker", LogMessageSeverity.Error));
+                return;
+            }        
 
             // Validacion propiedades
             if (string.IsNullOrWhiteSpace(ctrlSource))
@@ -73,10 +83,11 @@ namespace MotionLinker
                 return;
 
             }
+
             #endregion
 
             #region  Busqueda de controladores reales (online y offline)
-            Logger.AddMessage(new LogMessage("Inicio busqueda controladores", "MotionLinker"));
+            if (_logging) Logger.AddMessage(new LogMessage("Inicio busqueda controladores", "MotionLinker"));
             NetworkScanner scanner = new NetworkScanner();
             ControllerInfo[] controllers = scanner.GetControllers();
 
@@ -84,7 +95,7 @@ namespace MotionLinker
             { 
                 foreach (ControllerInfo ctrl in controllers ) 
                 {  
-                    Logger.AddMessage(new LogMessage($"Controlador {ctrl.Name}, ID {{ctrl.SystemId}} en IP {ctrl.IPAddress}", "MotionLinker"));
+                    if (_logging) Logger.AddMessage(new LogMessage($"Controlador {ctrl.Name}, ID {ctrl.SystemId} en IP {ctrl.IPAddress}", "MotionLinker"));
                 }            
             }
             else
@@ -95,7 +106,7 @@ namespace MotionLinker
             #endregion
 
             #region Busqueda de controladores virtuales (RobotStudio)
-            Logger.AddMessage(new LogMessage("Inicio busqueda controladores RobotStudio", "MotionLinker"));
+            if (_logging) Logger.AddMessage(new LogMessage("Inicio busqueda controladores RobotStudio", "MotionLinker"));
             Station station = Station.ActiveStation;
             RsIrc5ControllerCollection RsControllers = station.Irc5Controllers;
 
@@ -103,7 +114,7 @@ namespace MotionLinker
             {
                 foreach (RsIrc5Controller rsctrl in RsControllers)
                 {
-                    Logger.AddMessage(new LogMessage($"Controlador RobotStudio {rsctrl.Name}, ID {{rsctrl.SystemId.ToLower()}} en proyecto {rsctrl.ContainingProject}", "MotionLinker"));
+                    if (_logging) Logger.AddMessage(new LogMessage($"Controlador RobotStudio {rsctrl.Name}, ID {rsctrl.SystemId.ToLower()} en proyecto {rsctrl.ContainingProject}", "MotionLinker"));
                 }
             }
             else
@@ -143,7 +154,7 @@ namespace MotionLinker
             }
             else
             {
-                Logger.AddMessage(new LogMessage($"Controller {srcCtrl.SystemName} with ID {{{srcCtrl.SystemId}}} assigned as source controller", "MotionLinker",
+                Logger.AddMessage(new LogMessage($"Controller {srcCtrl.SystemName} with ID {srcCtrl.SystemId} assigned as source controller", "MotionLinker",
                     LogMessageSeverity.Information));
             }
             #endregion
@@ -165,6 +176,7 @@ namespace MotionLinker
             {
                 Logger.AddMessage(new LogMessage($"Controller {ctrlTarget} not found", "MotionLinker",
                     LogMessageSeverity.Error));
+                srcCtrl?.Dispose();
                 return;
             }
             else
@@ -181,7 +193,11 @@ namespace MotionLinker
                 if (rsGuid != srcCtrl.SystemId)
                 {
                     // Si no, son controladores diferentes
-                    Logger.AddMessage(new LogMessage($"Controllers IDs are different: {srcCtrl.SystemId} / {rsGuid}",
+                    Logger.AddMessage(new LogMessage($"Linked controllers IDs are different:",
+                        LogMessageSeverity.Warning));
+                    if (_logging) Logger.AddMessage(new LogMessage($"Source controller: {srcCtrl.SystemId}",
+                        LogMessageSeverity.Warning));
+                    if (_logging) Logger.AddMessage(new LogMessage($"Target controller: {rsGuid}",
                         LogMessageSeverity.Warning));
                 }
             }
@@ -189,26 +205,49 @@ namespace MotionLinker
             {
                 Logger.AddMessage(new LogMessage($"Invalid GUID: {tgtRsCtrl.SystemId}",
                     LogMessageSeverity.Error));
+                srcCtrl?.Dispose();
                 return;
             }
             #endregion
 
-            MechanismData mechData = new MechanismData();
+            #region Crear MechanismData y guardar en StateCache
+            MechanismData mechData = null;
 
-            // Source
-            mechData.SourceController = srcCtrl; // Controlador
-            mechData.MechUnit = mechData.SourceController.MotionSystem.MechanicalUnits[0]; // Mecanismo
+            try
+            {
+                mechData = new MechanismData(
+                    srcCtrl,
+                    tgtRsCtrl,
+                    cartesian ? SyncMode.Cartesian : SyncMode.Joint);
 
-            // Target 
-            mechData.TargetController = tgtRsCtrl; // Controlador
-            mechData.VirtualMechanism = tgtRsCtrl.MechanicalUnits[0].Mechanism; // Mecanismo
+                // Datos rapid del controlado fuente
+                mechData.InitRapidDataCache();
 
-            mechData.SourceController.StateChanged += OnControllerStateChanged;
-            mechData.SourceController.Rapid.ExecutionStatusChanged += OnExecutionChanged;
+                // Datos RobotStudio controlador objetivo
+                mechData.InitRsDataCache();
 
-            component.StateCache["MechanismData"] = mechData;
-            _controllerRunning[mechData.SourceController] = false; 
+                // Añadir datos de tool y wobjdata a la estacion
+                mechData.AddDataToStation();
 
+                //ABB.Robotics.RobotStudio.Mechanism
+                component.StateCache["MechanismData"] = mechData;
+                component.StateCache["lastTime"] = 0.0;
+
+            }
+            catch (Exception ex)
+            {
+                mechData?.Dispose();
+                if (mechData == null)
+                    srcCtrl?.Dispose();
+
+                Logger.AddMessage(new LogMessage(
+                    $"MechanismData creation failed during construction or initialization: {ex.Message}",
+                    "MotionLinker",
+                    LogMessageSeverity.Error));
+
+                return;
+            }
+            #endregion
         }
 
         //
@@ -225,8 +264,7 @@ namespace MotionLinker
             if (component.StateCache.ContainsKey("MechanismData") &&
                 component.StateCache["MechanismData"] is MechanismData mechData)
             {
-                _controllerRunning[mechData.SourceController] = false;
-                mechData.SourceController.Dispose();
+                mechData.Dispose();
             }
 
             component.StateCache.Clear();
@@ -279,47 +317,53 @@ namespace MotionLinker
         /// </remarks>
         public override void OnSimulationStep(SmartComponent component, double simulationTime, double previousTime)
         {
+            const double interval = 5000.0;
 
             if (component.StateCache.ContainsKey("MechanismData") &&
                 component.StateCache["MechanismData"] is MechanismData mechData)
             {
-                if (_controllerRunning[mechData.SourceController])
+                // Fallo consulta posicion con controladores virtuales
+                if (mechData.FirstRunning)
                 {
-                    try
+                    switch (mechData.Cartesian)
                     {
-                        JointTarget jt = mechData.MechUnit.GetPosition();
-                        double[] jv = new double[]{
-                                Globals.DegToRad(jt.RobAx.Rax_1),
-                                Globals.DegToRad(jt.RobAx.Rax_2),
-                                Globals.DegToRad(jt.RobAx.Rax_3),
-                                Globals.DegToRad(jt.RobAx.Rax_4),
-                                Globals.DegToRad(jt.RobAx.Rax_5),
-                                Globals.DegToRad(jt.RobAx.Rax_6)};
-                        mechData.VirtualMechanism.SetJointValues(jv, false);
-                        GraphicControl.UpdateAll();
+                        case SyncMode.Joint:
+                            // Sincronismo por posicion de ejes
+                            try
+                            {
+                                mechData.SyncJoint();
+                            }
+                            catch (Exception ex)
+                            {
+                                Logger.AddMessage(new LogMessage($"SyncJoint Position error: {ex.Message}", "MotionLinker", LogMessageSeverity.Error));
+                                return;
+                            }
+                            break;
+
+                        case SyncMode.Cartesian:
+                            // Sincronismo por posicion cartesiana
+                            try
+                            {
+                                mechData.SyncCartesian();
+                            }
+                            catch (Exception ex)
+                            {
+                                Logger.AddMessage(new LogMessage($"SyncCartesian Position error: {ex.Message}", "MotionLinker", LogMessageSeverity.Error));
+                                return;
+                            }
+                            break;
                     }
-                    catch (Exception ex)
-                    {
-                        Logger.AddMessage(new LogMessage($"GetPosition error: {ex.Message}", "MotionLinker"));
-                        return;
-                    }
+                    GraphicControl.UpdateAll();
                 }
+                else if (simulationTime - (double)component.StateCache["lastTime"] >= interval)
+                    {
+                        component.StateCache["lastTime"] = simulationTime;
+                        Logger.AddMessage(new LogMessage($" Waiting for first running of controller source", "MotionLinker", LogMessageSeverity.Warning));
+                    }                
             }
-        }
-        public void OnControllerStateChanged(object sender, StateChangedEventArgs e)
-        {
-            Logger.AddMessage(new LogMessage($"State: {e.NewState}", "MotionLinker"));
-
-        }
-        public void OnExecutionChanged(object sender, ExecutionStatusChangedEventArgs e)
-        {
-            Logger.AddMessage(new LogMessage($"Exec: {e.Status}", "MotionLinker"));
-
-            if (e.Status==ExecutionStatus.Running)
+            else
             {
-                Rapid rapid = null;
-                rapid = sender as Rapid;
-                _controllerRunning[rapid.Controller] = true;
+                return;
             }
         }
     }

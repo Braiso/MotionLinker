@@ -4,13 +4,11 @@
                  xsi:schemaLocation="urn:abb-robotics-robotstudio-libraryresource file:///C:\Program%20Files%20(x86)\ABB\SDK\RobotStudio%202025%20SDK\LibraryResourceSchema.xsd">
 	<SmartComponent name="MotionLinker" description="Conecta dos robots ABB">
 
-		<DynamicProperty
-		  name="SourceController"
-		  description="Controlador origen"/>
+		<DynamicProperty name="SourceController"/>
 
-		<DynamicProperty
-		  name="TargetController"
-		  description="Controlador destino"/>
+		<DynamicProperty name="TargetController"/>
+
+		<DynamicProperty name="Cartesian"/>
 
 	</SmartComponent>
 </LibraryResource>
