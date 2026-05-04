@@ -24,3 +24,6 @@
 - Sincronizar cambios nos datos entre sourceController e targetController en sincronismo cartesaiano
 - Ver que pasa con ExternalAxis. En principio esta implementado pero os valores no son coeherentes
 - Cambio de modo en quente
+- Arreglo dispose mechdata (feo).
+- Pequeno desaxuste entre movemento e tool usado. Filtro.
+- Inicializacion de rsdatacache. ¿Modificase co primeiro evento de cambio de valor?

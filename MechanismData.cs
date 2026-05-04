@@ -8,6 +8,7 @@ using ABB.Robotics.RobotStudio.Stations;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics.Eventing.Reader;
+using System.Globalization;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
@@ -15,6 +16,7 @@ using static System.Collections.Specialized.BitVector32;
 using static System.Windows.Forms.VisualStyles.VisualStyleElement;
 using static System.Windows.Forms.VisualStyles.VisualStyleElement.TextBox;
 using ControllerTask = ABB.Robotics.Controllers.RapidDomain.Task;
+using Task = System.Threading.Tasks.Task;
 
 namespace MotionLinker
 {
@@ -25,12 +27,14 @@ namespace MotionLinker
         public bool FirstRunning { get; private set; } = false;
         private Controller _sourceController;
         private MechanicalUnit _mechUnit;
-        private Dictionary<string, ToolData> _sourceTools;
-        private Dictionary<string, WobjData> _sourceWobjs;
+        private Dictionary<string, RapidData> _sourceTools;
+        private Dictionary<string, RapidData> _sourceWobjs;
         private RsIrc5Controller _targetController;
         private Mechanism _virtualMechanism;
         private Dictionary<string, RsToolData> _targetTools;
         private Dictionary<string, RsWorkObject> _targetWobjs;
+        private RsToolData _targetToolActive;
+        private RsWorkObject _targetWobjActive;
 
         public SyncMode Cartesian { get; private set; }
 
@@ -76,9 +80,9 @@ namespace MotionLinker
                 );
 
                 // Visual
-                rstooldata.ShowName = true; // Show the name of the tool data in the graphics.
+                rstooldata.ShowName = false; // Show the name of the tool data in the graphics.
                 rstooldata.FrameSize *= 2; // Set the frame size to twice its default size.
-                rstooldata.Visible = true; // Show the tool data in the graphics.
+                rstooldata.Visible = false; // Show the tool data in the graphics.
                 return rstooldata;
                 
             }
@@ -133,8 +137,8 @@ namespace MotionLinker
                 );
 
                 // Visual
-                rsWobj.ShowName = true;
-                rsWobj.Visible = true;
+                rsWobj.ShowName = false;
+                rsWobj.Visible = false;
                 rsWobj.FrameSize *= 2;
 
                 return rsWobj;
@@ -194,6 +198,68 @@ namespace MotionLinker
                 throw new Exception($"Error converting robtarget '{name}': {ex.Message}", ex);
             }
         }
+        private void UpdateTool(string key, RapidData rd)
+        {
+            if (!_targetTools.TryGetValue(key, out var rstool))
+                return;
+
+            if (rd.RapidType != "tooldata")
+                return;
+
+            ToolData tool = (ToolData)rd.Value;
+
+            const double scale = 1.0 / 1000.0;
+
+            rstool.RobotHold = tool.Robhold;
+            rstool.Frame.Matrix = new Matrix4(
+                new Vector3(
+                    tool.Tframe.Trans.X * scale,
+                    tool.Tframe.Trans.Y * scale,
+                    tool.Tframe.Trans.Z * scale),
+                new Quaternion(
+                    tool.Tframe.Rot.Q1,
+                    tool.Tframe.Rot.Q2,
+                    tool.Tframe.Rot.Q3,
+                    tool.Tframe.Rot.Q4)
+            );
+        }
+        private void UpdateWobj(string key, RapidData rd)
+        {
+            if (!_targetWobjs.TryGetValue(key, out var rsWobj))
+                return;
+
+            if (rd.RapidType != "wobjdata")
+                return;
+
+            WobjData wobj = (WobjData)rd.Value;
+
+            const double scale = 1.0 / 1000.0;
+
+            rsWobj.RobotHold = wobj.Robhold;
+            rsWobj.UserFrameProgrammed = wobj.Ufprog;
+            rsWobj.UserFrame.Matrix = new Matrix4(
+                new Vector3(
+                    wobj.Uframe.Trans.X * scale,
+                    wobj.Uframe.Trans.Y * scale,
+                    wobj.Uframe.Trans.Z * scale),
+                new Quaternion(
+                    wobj.Uframe.Rot.Q1,
+                    wobj.Uframe.Rot.Q2,
+                    wobj.Uframe.Rot.Q3,
+                    wobj.Uframe.Rot.Q4)
+            );
+            rsWobj.ObjectFrame.Matrix = new Matrix4(
+                new Vector3(
+                    wobj.Oframe.Trans.X * scale,
+                    wobj.Oframe.Trans.Y * scale,
+                    wobj.Oframe.Trans.Z * scale),
+                new Quaternion(
+                    wobj.Oframe.Rot.Q1,
+                    wobj.Oframe.Rot.Q2,
+                    wobj.Oframe.Rot.Q3,
+                    wobj.Oframe.Rot.Q4)
+            );
+        }
         public void SyncJoint()
         {
             double[] jv = new double[6];
@@ -226,61 +292,50 @@ namespace MotionLinker
                 module = MotionScope.Module.ToLower();
             }
 
-            // Obtener variables trayectoria controlador fuente
+            #region Obtener variables de posicion
+
             string tool = _mechUnit.Tool.Name.ToLower();
             string wobj = _mechUnit.WorkObject.Name.ToLower();
+            RsRobTarget posActual = ConvertToRsRobTarget("posAct", task.GetRobTarget());
+            #endregion
 
             #region Resolver tool (tooldata->rsTooldata) 
 
             // Obtener rsTooldata
-            RsToolData toolactive = null;
-            bool isLocal = false;
+            if (_targetToolActive != null)
+            {
+                _targetToolActive.Visible = false;
+                _targetToolActive.ShowName = false;
+            }
             string localKey = $"{module}_{tool}";
 
-            // Primero se busca valor local si no lo hay se busca global
-            if (_targetTools.TryGetValue(localKey, out toolactive))
-            {
-                isLocal = true;
-            }
-            else if (_targetTools.TryGetValue(tool, out toolactive))
-            {
-                isLocal = false;
-            }
-            else
+            // Primero se busca valor local, si no lo hay se busca global
+            if (!_targetTools.TryGetValue(localKey, out _targetToolActive) &&
+                !_targetTools.TryGetValue(tool, out _targetToolActive))
             {
                 throw new Exception($"RsToolData '{tool}' not found");
             }
+            _targetToolActive.Visible = true;
+            _targetToolActive.ShowName = true;
             #endregion
 
             #region Resolver wobjdata (wobjdata->rsWobjdata)
-            // Obtener RsWorkObject
-            RsWorkObject wobjActive;
-            bool isLocalWobj = false;
 
+            // Obtener RsWorkObject
+            if (_targetWobjActive != null)
+            {
+                _targetWobjActive.Visible = false;
+                _targetWobjActive.ShowName = false;
+            }
             string localKeyWobj = $"{module}_{wobj}";
 
-            if (_targetWobjs.TryGetValue(localKeyWobj, out wobjActive))
-            {
-                isLocalWobj = true;
-            }
-            else if (_targetWobjs.TryGetValue(wobj, out wobjActive))
-            {
-                isLocalWobj = false;
-            }
-            else
+            if (!_targetWobjs.TryGetValue(localKeyWobj, out _targetWobjActive) &&
+                !_targetWobjs.TryGetValue(wobj, out _targetWobjActive))
             {
                 throw new Exception($"RsWorkObject '{wobj}' not found");
             }
-            #endregion
-
-            #region Resolver posicion
-            RsRobTarget posActual = ConvertToRsRobTarget("posAct",task.GetRobTarget());
-
-            #endregion
-
-            #region
-            // Sincronizacion tooldata y wobjdata
-            // SyncDataAsync(string, SyncDirection, List<SyncLogMessage>)
+            _targetWobjActive.Visible = true;
+            _targetWobjActive.ShowName = true;
             #endregion
 
             #region Transmitir posicion (controller->rsController)
@@ -293,7 +348,10 @@ namespace MotionLinker
                 posActual.ConfigurationData.Cfx
             };
 
-            _virtualMechanism.CalculateInverseKinematics(posActual, wobjActive, toolactive, conf, out var jv);
+            // Kinematics en depuracion. Configuracion de ejes
+            _virtualMechanism.CalculateInverseKinematics(new RsTarget(_targetWobjActive, posActual), _targetToolActive,false,out var jv);
+            //_virtualMechanism.CalculateInverseKinematics(posActual, _targetWobjActive, _targetToolActive, conf, out var jv);
+
             if (jv is null)
             {
                 throw new Exception("Inverse Kinematics is failed.Unreachable target");
@@ -306,8 +364,8 @@ namespace MotionLinker
         }
         public void InitRapidDataCache()
         {
-            var tools = new Dictionary<string, ToolData>();
-            var wobjs = new Dictionary<string, WobjData>();
+            var tools = new Dictionary<string, RapidData>();
+            var wobjs = new Dictionary<string, RapidData>();
 
             RapidSymbol[] tooldatas;
             RapidSymbol[] wobjdatas;
@@ -343,10 +401,10 @@ namespace MotionLinker
 
                         if (!tools.ContainsKey(key))
                         {
-
-                            if (rd.Value is ToolData tooldata)
+                            if (rd.RapidType == "tooldata")
                             {
-                                tools.Add(key, tooldata);
+                                rd.ValueChanged += OnValueChanged;
+                                tools.Add(key, rd);
                             }
                             else
                             {
@@ -386,9 +444,10 @@ namespace MotionLinker
 
                         if (!wobjs.ContainsKey(key))
                         {
-                            if (rd.Value is WobjData wobjdata)
+                            if (rd.RapidType == "wobjdata")
                             {
-                                wobjs.Add(key, wobjdata);
+                                rd.ValueChanged += OnValueChanged;
+                                wobjs.Add(key, rd);
                             }
                             else
                             {
@@ -425,12 +484,12 @@ namespace MotionLinker
             {
                 _targetTools = _sourceTools.ToDictionary(
                     kvp => kvp.Key,
-                    kvp => ConvertToRsTool(kvp.Key, kvp.Value)
+                    kvp => ConvertToRsTool(kvp.Key, (ToolData)kvp.Value.Value)
                 );
 
                 _targetWobjs = _sourceWobjs.ToDictionary(
                     kvp => kvp.Key,
-                    kvp => ConvertToRsWobj(kvp.Key, kvp.Value)
+                    kvp => ConvertToRsWobj(kvp.Key, (WobjData)kvp.Value.Value)
                 );
             }
             catch (Exception ex)
@@ -452,9 +511,9 @@ namespace MotionLinker
                 return;
             }
 
+            // Tools
             foreach (var tool in _targetTools.Values)
             {
-
                 if (tool.Name.Equals("tool0", StringComparison.OrdinalIgnoreCase))
                     continue;
 
@@ -475,6 +534,7 @@ namespace MotionLinker
                 task.DataDeclarations.Add(tool);
             }
 
+            //wobjs
             foreach (var wobj in _targetWobjs.Values)
             {
                 if (wobj.Name.Equals("wobj0", StringComparison.OrdinalIgnoreCase))
@@ -509,8 +569,93 @@ namespace MotionLinker
                 FirstRunning = true;
             }
         }
+        private void OnValueChanged(object sender, DataValueChangedEventArgs e)
+        {
+            if (!(sender is RapidData rd))
+                return;
+
+            try
+            {
+                string key;
+                RapidSymbol sym = rd.Symbol;
+                if (rd.IsLocal)
+                {
+                    key = $"{sym.Scope[1]}_{sym.Name}".ToLower();
+                }
+                else
+                {
+                    key = sym.Name.ToLower();
+                }
+
+                switch (rd.RapidType)
+                {
+                    case "tooldata":
+                        UpdateTool(key, rd);
+                        break;
+
+                    case "wobjdata":
+                        UpdateWobj(key, rd);
+                        break;
+                }
+            
+            }
+            catch (Exception)
+            {
+                Logger.AddMessage(new LogMessage(
+                    "Cast fail",
+                    "MotionLinker",
+                    LogMessageSeverity.Warning));
+            }
+
+        }
         public void Dispose()
         {
+            if (_sourceTools != null)
+            {
+                foreach (var item in _sourceTools.Values)
+                {
+                    try
+                    {
+                        item.ValueChanged -= OnValueChanged;
+                        item?.Dispose();
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.AddMessage(new LogMessage(
+                            $"Error disposing rapiddata: {ex.Message}",
+                            "MotionLinker",
+                            LogMessageSeverity.Warning));
+                    }
+                }
+
+                _sourceTools.Clear();
+                _sourceTools = null;
+            }
+
+            if (_sourceWobjs != null)
+            {
+                foreach (var item in _sourceWobjs.Values)
+                {
+                    try
+                    {
+                        item.ValueChanged -= OnValueChanged;
+                        item?.Dispose();
+                    }
+                    catch (Exception ex)
+                    {
+
+                        Logger.AddMessage(new LogMessage(
+                            $"Error disposing rapiddata: {ex.Message}",
+                            "MotionLinker",
+                            LogMessageSeverity.Warning));
+                    }
+                }
+
+                _sourceWobjs.Clear();
+                _sourceWobjs = null;
+            }
+
+
             if (_sourceController != null)
             {
                 try
