@@ -83,13 +83,39 @@ namespace MotionLinker
                 return;
 
             }
+            #endregion
 
+            #region Comprobacion de identidad
+            bool oneController;
+            if (ctrlSource==ctrlTarget)
+            {
+                // En caso de ser tener el  mismo nombre se supone que se conecta el real con su homonimo virtual
+                oneController = true;
+                Logger.AddMessage(new LogMessage($"Same name controllers. Source is online",
+                    LogMessageSeverity.Warning));
+            }
+            else
+            {
+                oneController = false;
+                Logger.AddMessage(new LogMessage($"Different name controllers. Source is online or offline",
+                    LogMessageSeverity.Warning));
+            }
             #endregion
 
             #region  Busqueda de controladores reales (online y offline)
             if (_logging) Logger.AddMessage(new LogMessage("Inicio busqueda controladores", "MotionLinker"));
             NetworkScanner scanner = new NetworkScanner();
-            ControllerInfo[] controllers = scanner.GetControllers();
+
+            ControllerInfo[] controllers = null;
+            if (oneController)
+            {
+                // Mismo nombre el source deberia ser real
+                controllers = scanner.GetControllers(NetworkScannerSearchCriterias.Real);
+            }
+            else
+            {
+                controllers = scanner.GetControllers();
+            }
 
             if (controllers.Length > 0) 
             { 
@@ -129,7 +155,7 @@ namespace MotionLinker
             Controller srcCtrl = null;
             foreach (ControllerInfo ctrl in controllers)
             {
-                if (ctrl.Name == ctrlSource)
+                if (ctrl.SystemName == ctrlSource)
                 {
                     srcCtrl = ControllerHelper.ConnectController(ctrl);
                     if (srcCtrl is null)
@@ -167,6 +193,7 @@ namespace MotionLinker
                 if (rsctrl.Name == ctrlTarget)
                 {
                     tgtRsCtrl = rsctrl;
+                    
                     // Se termina la busqueda aunque haya mas coincidencias
                     break;
                 }
@@ -182,31 +209,7 @@ namespace MotionLinker
             else
             {
                 Logger.AddMessage(new LogMessage($"Controller {tgtRsCtrl.Name} with ID {tgtRsCtrl.SystemId.ToLower()} assigned as target controller",
-                    LogMessageSeverity.Information));
-            }
-            #endregion
-
-            #region Comprobacion de identidad
-            // Si el GUID es el mismo se trata del mismo controlador en su version real, ya sea online u offline, y su version simulada en RobotStudio
-            if (Guid.TryParse(tgtRsCtrl.SystemId, out Guid rsGuid))
-            {
-                if (rsGuid != srcCtrl.SystemId)
-                {
-                    // Si no, son controladores diferentes
-                    Logger.AddMessage(new LogMessage($"Linked controllers IDs are different:",
-                        LogMessageSeverity.Warning));
-                    if (_logging) Logger.AddMessage(new LogMessage($"Source controller: {srcCtrl.SystemId}",
-                        LogMessageSeverity.Warning));
-                    if (_logging) Logger.AddMessage(new LogMessage($"Target controller: {rsGuid}",
-                        LogMessageSeverity.Warning));
-                }
-            }
-            else
-            {
-                Logger.AddMessage(new LogMessage($"Invalid GUID: {tgtRsCtrl.SystemId}",
-                    LogMessageSeverity.Error));
-                srcCtrl?.Dispose();
-                return;
+                     "MotionLinker", LogMessageSeverity.Information));
             }
             #endregion
 
@@ -218,6 +221,7 @@ namespace MotionLinker
                 mechData = new MechanismData(
                     srcCtrl,
                     tgtRsCtrl,
+                    oneController,
                     cartesian ? SyncMode.Cartesian : SyncMode.Joint);
 
                 // Datos rapid del controlado fuente
@@ -229,7 +233,6 @@ namespace MotionLinker
                 // Añadir datos de tool y wobjdata a la estacion
                 mechData.AddDataToStation();
 
-                //ABB.Robotics.RobotStudio.Mechanism
                 component.StateCache["MechanismData"] = mechData;
                 component.StateCache["lastTime"] = 0.0;
 
@@ -237,8 +240,7 @@ namespace MotionLinker
             catch (Exception ex)
             {
                 mechData?.Dispose();
-                if (mechData == null)
-                    srcCtrl?.Dispose();
+                srcCtrl?.Dispose();
 
                 Logger.AddMessage(new LogMessage(
                     $"MechanismData creation failed during construction or initialization: {ex.Message}",
@@ -323,9 +325,9 @@ namespace MotionLinker
                 component.StateCache["MechanismData"] is MechanismData mechData)
             {
                 // Fallo consulta posicion con controladores virtuales
-                if (mechData.FirstRunning)
+                if (mechData.FirstRunning || mechData.OneController)
                 {
-                    switch (mechData.Cartesian)
+                    switch (mechData.ActiveSync)
                     {
                         case SyncMode.Joint:
                             // Sincronismo por posicion de ejes
@@ -365,6 +367,10 @@ namespace MotionLinker
             {
                 return;
             }
+        }
+        private void OptimizeGraphicControl()
+        {
+            GraphicControl.UpdateAll();
         }
     }
 }

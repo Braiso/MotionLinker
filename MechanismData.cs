@@ -1,5 +1,4 @@
 ﻿using ABB.Robotics.Controllers;
-using ABB.Robotics.Controllers.Configuration;
 using ABB.Robotics.Controllers.MotionDomain;
 using ABB.Robotics.Controllers.RapidDomain;
 using ABB.Robotics.Math;
@@ -7,49 +6,50 @@ using ABB.Robotics.RobotStudio;
 using ABB.Robotics.RobotStudio.Stations;
 using System;
 using System.Collections.Generic;
-using System.Diagnostics.Eventing.Reader;
-using System.Globalization;
+using System.ComponentModel;
+using System.Diagnostics;
 using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-using static System.Collections.Specialized.BitVector32;
-using static System.Windows.Forms.VisualStyles.VisualStyleElement;
-using static System.Windows.Forms.VisualStyles.VisualStyleElement.TextBox;
 using ControllerTask = ABB.Robotics.Controllers.RapidDomain.Task;
-using Task = System.Threading.Tasks.Task;
 
 namespace MotionLinker
 {
-    public class MechanismData
+    public class MechanismData : IDisposable
     {
         // Marca de primer arranque evita "excepcion controller not response"
         // Caso raro en pruebas con controladores offline
         public bool FirstRunning { get; private set; } = false;
-        private Controller _sourceController;
-        private MechanicalUnit _mechUnit;
-        private Dictionary<string, RapidData> _sourceTools;
-        private Dictionary<string, RapidData> _sourceWobjs;
+        public bool OneController { get; private set; }
+        private Controller _sourceController; // IDisposable
+        private MechanicalUnit _mechUnit; // IDisposable
+        private Dictionary<string, RapidData> _sourceTools; // RapidData IDisposable
+        private Dictionary<string, RapidData> _sourceWobjs; // RapidData IDisposable
         private RsIrc5Controller _targetController;
         private Mechanism _virtualMechanism;
         private Dictionary<string, RsToolData> _targetTools;
         private Dictionary<string, RsWorkObject> _targetWobjs;
         private RsToolData _targetToolActive;
         private RsWorkObject _targetWobjActive;
+        private bool _disposedValue;
 
-        public SyncMode Cartesian { get; private set; }
+        public SyncMode ActiveSync { get; private set; }
+        public SyncMode DefaultSync { get; private set; }
 
         public MechanismData(
             Controller sourceController,
             RsIrc5Controller targetController,
-            SyncMode cartesian)
+            bool onecontroller,
+            SyncMode sync)
         {
             _sourceController = sourceController ?? throw new ArgumentNullException(nameof(sourceController));
             _mechUnit = _sourceController.MotionSystem.MechanicalUnits[0];
             _targetController = targetController ?? throw new ArgumentNullException(nameof(targetController));
             _virtualMechanism = _targetController.MechanicalUnits[0].Mechanism;
-            Cartesian = cartesian;
+            OneController = onecontroller;
+            ActiveSync = sync;
+            DefaultSync = sync;
 
             _sourceController.StateChanged += OnControllerStateChanged;
+            _sourceController.OperatingModeChanged += OnOperatingModeChanged;
             _sourceController.Rapid.ExecutionStatusChanged += OnExecutionChanged;
         }
         private RsToolData ConvertToRsTool(string name,ToolData tool)
@@ -107,8 +107,11 @@ namespace MotionLinker
                 // Si el robot sostiene el objeto
                 rsWobj.RobotHold = wobj.Robhold;
 
-                //  Si el user frame está programado
+                // Si el user frame es fijo o se mueve
                 rsWobj.UserFrameProgrammed = wobj.Ufprog;
+
+                // Unidad mecanica asociada
+                rsWobj.UserFrameMechanicalUnit = wobj.Ufmec;
 
                 // uframe
                 rsWobj.UserFrame.Matrix = new Matrix4(
@@ -262,18 +265,32 @@ namespace MotionLinker
         }
         public void SyncJoint()
         {
-            double[] jv = new double[6];
+            double[] jv_rax = new double[6];
 
+            Stopwatch sw = Stopwatch.StartNew();
             JointTarget jt = _mechUnit.GetPosition();
+            sw.Stop();
 
-            jv[0] = Globals.DegToRad(jt.RobAx.Rax_1);
-            jv[1] = Globals.DegToRad(jt.RobAx.Rax_2);
-            jv[2] = Globals.DegToRad(jt.RobAx.Rax_3);
-            jv[3] = Globals.DegToRad(jt.RobAx.Rax_4);
-            jv[4] = Globals.DegToRad(jt.RobAx.Rax_5);
-            jv[5] = Globals.DegToRad(jt.RobAx.Rax_6);
+            if (sw.ElapsedMilliseconds > 100)
+            {
+                Logger.AddMessage(new LogMessage(
+                    $"High GetRobTarget latency: {sw.ElapsedMilliseconds} ms",
+                    "MotionLinker",
+                    LogMessageSeverity.Warning));
+            }
 
-            _virtualMechanism.SetJointValues(jv, false);
+            // Robot axes
+            jv_rax[0] = Globals.DegToRad(jt.RobAx.Rax_1);
+            jv_rax[1] = Globals.DegToRad(jt.RobAx.Rax_2);
+            jv_rax[2] = Globals.DegToRad(jt.RobAx.Rax_3);
+            jv_rax[3] = Globals.DegToRad(jt.RobAx.Rax_4);
+            jv_rax[4] = Globals.DegToRad(jt.RobAx.Rax_5);
+            jv_rax[5] = Globals.DegToRad(jt.RobAx.Rax_6);
+
+            double[] jvActiveAxes = new double[_virtualMechanism.NumActiveJoints];
+            Array.Copy(jv_rax, jvActiveAxes, _virtualMechanism.NumActiveJoints);
+            _virtualMechanism.SetJointValues(jvActiveAxes, false);
+
         }
         public void SyncCartesian()
         {
@@ -296,7 +313,19 @@ namespace MotionLinker
 
             string tool = _mechUnit.Tool.Name.ToLower();
             string wobj = _mechUnit.WorkObject.Name.ToLower();
+            
+            Stopwatch sw = Stopwatch.StartNew();
             RsRobTarget posActual = ConvertToRsRobTarget("posAct", task.GetRobTarget());
+            //RsRobTarget posActual = ConvertToRsRobTarget("posAct", task.GetRobTarget(tool,wobj));
+            sw.Stop();
+
+            if (sw.ElapsedMilliseconds > 100)
+            {
+                Logger.AddMessage(new LogMessage(
+                    $"High GetRobTarget latency: {sw.ElapsedMilliseconds} ms",
+                    "MotionLinker",
+                    LogMessageSeverity.Warning));
+            }
             #endregion
 
             #region Resolver tool (tooldata->rsTooldata) 
@@ -348,17 +377,28 @@ namespace MotionLinker
                 posActual.ConfigurationData.Cfx
             };
 
+            //Comprobar consistencia de snapshot de posicion
+            if (tool != _mechUnit.Tool.Name.ToLower() || module != MotionScope.Module.ToLower() || wobj != _mechUnit.WorkObject.Name.ToLower())
+            {
+                return;
+            }
+
             // Kinematics en depuracion. Configuracion de ejes
             _virtualMechanism.CalculateInverseKinematics(new RsTarget(_targetWobjActive, posActual), _targetToolActive,false,out var jv);
             //_virtualMechanism.CalculateInverseKinematics(posActual, _targetWobjActive, _targetToolActive, conf, out var jv);
 
             if (jv is null)
             {
-                throw new Exception("Inverse Kinematics is failed.Unreachable target");
+                throw new Exception($"Inverse Kinematics is failed.Unreachable target.\nTool: {_targetToolActive.Name}" +
+                    $"\nWobj: {_targetWobjActive.Name}.");
             }
             else
             {
-                _virtualMechanism.SetJointValues(jv, false);
+
+                double[] jvActiveAxes = new double[_virtualMechanism.NumActiveJoints];
+                Array.Copy(jv, jvActiveAxes, _virtualMechanism.NumActiveJoints);
+
+                _virtualMechanism.SetJointValues(jvActiveAxes, false);
             }
             #endregion
         }
@@ -406,13 +446,6 @@ namespace MotionLinker
                                 rd.ValueChanged += OnValueChanged;
                                 tools.Add(key, rd);
                             }
-                            else
-                            {
-                                Logger.AddMessage(new LogMessage(
-                                    $"Symbol '{sym.Name}' is not of type tooldata (Scope: {key})",
-                                    "MotionLinker",
-                                    LogMessageSeverity.Warning));
-                            }
                         }
                         else
                         {
@@ -448,13 +481,6 @@ namespace MotionLinker
                             {
                                 rd.ValueChanged += OnValueChanged;
                                 wobjs.Add(key, rd);
-                            }
-                            else
-                            {
-                                Logger.AddMessage(new LogMessage(
-                                    $"Symbol '{sym.Name}' is not of type wobjdata (Scope: {key})",
-                                    "MotionLinker",
-                                    LogMessageSeverity.Warning));
                             }
                         }
                         else
@@ -558,7 +584,31 @@ namespace MotionLinker
         }
         private void OnControllerStateChanged(object sender, StateChangedEventArgs e)
         {
-            // Logger.AddMessage(new LogMessage($"State: {e.NewState}", "MotionLinker"));
+            // Futura uso
+            //Logger.AddMessage(new LogMessage($"State: {e.NewState}", "MotionLinker"));
+        }
+        private void OnOperatingModeChanged(object sender, OperatingModeChangeEventArgs e)
+        {
+            if ((e.NewMode == ControllerOperatingMode.ManualReducedSpeed || e.NewMode == ControllerOperatingMode.ManualFullSpeed) &&
+                DefaultSync == SyncMode.Cartesian)
+            {
+                // Cartesian sync is not reliable in manual modes
+                ActiveSync = SyncMode.Joint;
+
+                Logger.AddMessage(new LogMessage(
+                    $"Switching to Joint sync: Cartesian sync is not reliable in {e.NewMode} mode.",
+                    "MotionLinker",
+                    LogMessageSeverity.Warning));
+            }
+            else if (ActiveSync!= DefaultSync && e.NewMode == ControllerOperatingMode.Auto)
+                {
+                    ActiveSync = DefaultSync;
+
+                    Logger.AddMessage(new LogMessage(
+                        $"Cartesian sync restored.",
+                        "MotionLinker",
+                        LogMessageSeverity.Warning));
+            }
         }
         private void OnExecutionChanged(object sender, ExecutionStatusChangedEventArgs e)
         {
@@ -597,12 +647,11 @@ namespace MotionLinker
                         UpdateWobj(key, rd);
                         break;
                 }
-            
             }
-            catch (Exception)
+            catch (Exception ex)
             {
                 Logger.AddMessage(new LogMessage(
-                    "Cast fail",
+                    $"OnValueChanged error: {ex.Message}",
                     "MotionLinker",
                     LogMessageSeverity.Warning));
             }
@@ -610,92 +659,79 @@ namespace MotionLinker
         }
         public void Dispose()
         {
+            if (_disposedValue)
+                return;
+
+            // _sourceTools: RapidData
             if (_sourceTools != null)
             {
                 foreach (var item in _sourceTools.Values)
                 {
-                    try
-                    {
-                        item.ValueChanged -= OnValueChanged;
-                        item?.Dispose();
-                    }
-                    catch (Exception ex)
-                    {
-                        Logger.AddMessage(new LogMessage(
-                            $"Error disposing rapiddata: {ex.Message}",
-                            "MotionLinker",
-                            LogMessageSeverity.Warning));
-                    }
-                }
 
+                    SafeDispose(() => item.ValueChanged -= OnValueChanged, "Tools.OnValueChanged");
+                    SafeDispose(() => item.Dispose(), "Tools.Dispose");
+                }
                 _sourceTools.Clear();
                 _sourceTools = null;
             }
 
+            // _sourceWobjs: RapidData
             if (_sourceWobjs != null)
             {
                 foreach (var item in _sourceWobjs.Values)
                 {
-                    try
-                    {
-                        item.ValueChanged -= OnValueChanged;
-                        item?.Dispose();
-                    }
-                    catch (Exception ex)
-                    {
 
-                        Logger.AddMessage(new LogMessage(
-                            $"Error disposing rapiddata: {ex.Message}",
-                            "MotionLinker",
-                            LogMessageSeverity.Warning));
-                    }
+                    SafeDispose(() => item.ValueChanged -= OnValueChanged, "Wobjs.OnValueChanged");
+                    SafeDispose(() => item.Dispose(), "Wobjs.Dispose");
                 }
-
                 _sourceWobjs.Clear();
                 _sourceWobjs = null;
             }
 
-
-            if (_sourceController != null)
-            {
-                try
-                {
-                    _sourceController.StateChanged -= OnControllerStateChanged;
-
-                    if (_sourceController.Rapid != null)
-                        _sourceController.Rapid.ExecutionStatusChanged -= OnExecutionChanged;
-
-                    _sourceController.Dispose();
-                }
-                catch (Exception ex)
-                {
-                    Logger.AddMessage(new LogMessage(
-                        $"Error disposing controller: {ex.Message}",
-                        "MotionLinker",
-                        LogMessageSeverity.Warning));
-                }
-                finally
-                {
-                    _sourceController = null;
-                }
-            }
+            // _mechUnit: MechanicalUnit
             if (_mechUnit != null)
             {
-                try
-                {
-                    _mechUnit.Dispose();
-                }
-                catch (Exception ex)
-                {
-                    Logger.AddMessage(new LogMessage(
-                        $"Error disposing mechanismo data: {ex.Message}",
-                        "MotionLinker",
-                        LogMessageSeverity.Warning));
-                }
-                finally
-                {
-                    _mechUnit = null;
-                }
+                SafeDispose(
+                    () => _mechUnit.Dispose(),
+                    "MechanismUnit.Dispose");
+                _mechUnit = null;
+            }
+
+            // _sourceController: Controller
+            if (_sourceController != null)
+            {
+                SafeDispose(
+                    () => _sourceController.StateChanged -= OnControllerStateChanged,
+                    "Controller.StateChanged");
+
+                SafeDispose(
+                    () => _sourceController.OperatingModeChanged -= OnOperatingModeChanged,
+                    "Controller.OperatingModeChanged");
+                
+                SafeDispose(
+                    () => _sourceController.Rapid.ExecutionStatusChanged -= OnExecutionChanged,
+                    "Rapid.ExecutionStatusChanged");
+
+                SafeDispose(
+                    () => _sourceController.Dispose(),
+                    "Controller.Dispose");
+                _sourceController = null;
+            }
+
+            _disposedValue = true;
+        }
+        private void SafeDispose(Action action, string name)
+        {
+            try
+            {
+                action();
+            }
+            catch (Exception ex)
+            {
+                Logger.AddMessage(new LogMessage(
+                    $"Dispose error ({name}): {ex.Message}",
+                    "MotionLinker",
+                    LogMessageSeverity.Warning));
             }
         }
     }

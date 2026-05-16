@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [Unreleased] 
 
 ### Added
 - Implementación da cinemática inversa usando `CalculateInverseKinematics`
@@ -27,3 +27,27 @@
 - Arreglo dispose mechdata (feo).
 - Pequeno desaxuste entre movemento e tool usado. Filtro.
 - Inicializacion de rsdatacache. ¿Modificase co primeiro evento de cambio de valor?
+
+## [Unreleased] 10-05-2026
+
+### Added
+
+### Changed
+- Anulada sincronizacion cartesiana por probemas de funcionamiento. Solo auto.
+
+### Fixed
+- Arreglo dispose mechdata.
+- Sincronizar cambios nos datos entre sourceController e targetController en sincronismo cartesaiano
+- Pequeno desaxuste entre movemento e tool usado (Filtro). Detectar e omitir inconsistencias no frame e no tool durante o calculo.
+
+### Notes
+- Inicializacion de rsdatacache. ¿Modificase co primeiro evento de cambio de valor?
+- Probas con GetRobtarget(string tool, string wobj). Problemas de resolucion de nomes locales. Imposible determinar scope.
+
+### TODO
+- Lista desplegable con controladores activos
+- Ver que pasa con ExternalAxis. En principio esta implementado pero os valores no son coeherentes
+- Cambio de modo en quente
+- Calidad de conexion
+- Optimizacion de refresco de graficos
+	- DetailLevel	

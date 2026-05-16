@@ -16,12 +16,12 @@
 				<DynamicProperty 
 					name="SourceController"
 					valueType="System.String"
-					value="4600-116551_CR1"
+					value="IRB140_6_81"
 					description="Controller source of the movement"/>
 				<DynamicProperty 
 					name="TargetController"
 					valueType="System.String"
-					value="4600-116552_CR2"
+					value="IRB140_6_81_T"
 					description="Controller target of the movement"/>
 				<DynamicProperty
 					name="Cartesian"
