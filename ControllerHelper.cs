@@ -45,5 +45,49 @@ namespace MotionLinker
                 return null;
             }
         }
+        public static string SearchSystemNames(bool online, bool logging = false)
+        {
+            if (logging) Logger.AddMessage(new LogMessage("Inicio busqueda controladores", "MotionLinker"));
+            
+            NetworkScanner scanner = new NetworkScanner();
+            ControllerInfo[] controllers = null;
+
+            if (online)
+            {
+                controllers = scanner.GetControllers(NetworkScannerSearchCriterias.Real);
+            }
+            else
+            {
+                controllers = scanner.GetControllers();
+            }
+
+            if (controllers == null || controllers.Length == 0)
+            {
+                Logger.AddMessage(
+                    new LogMessage(
+                        "Controllers not found",
+                        "MotionLinker",
+                        LogMessageSeverity.Error));
+
+                return string.Empty;
+            }
+
+            List<string> names = new List<string>();
+
+            foreach (ControllerInfo ctrl in controllers)
+            {
+                names.Add(ctrl.SystemName);
+
+                if (logging)
+                {
+                    Logger.AddMessage(
+                        new LogMessage(
+                            $"Controlador {ctrl.Name}, ID {ctrl.SystemId} en IP {ctrl.IPAddress}",
+                            "MotionLinker"));
+                }
+            }
+
+            return string.Join(";", names);
+        }
     }
 }

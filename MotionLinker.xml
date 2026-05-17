@@ -13,21 +13,33 @@
 										codeBehind="MotionLinker.CodeBehind,MotionLinker.dll"
 										canBeSimulated="true">
 			<Properties>
-				<DynamicProperty 
+				
+				<DynamicProperty
 					name="SourceController"
 					valueType="System.String"
-					value="IRB140_6_81"
-					description="Controller source of the movement"/>
-				<DynamicProperty 
+					description="Controller source of the movement">
+					<Attribute key="AllowedValues" value="?" />
+				</DynamicProperty>
+				
+				<DynamicProperty
+					name="OnlineSource"
+					valueType="System.Boolean"
+					value="false"
+					description="True if the source controller is offline"/>
+				
+				<DynamicProperty
 					name="TargetController"
 					valueType="System.String"
-					value="IRB140_6_81_T"
-					description="Controller target of the movement"/>
+					description="Controller target of the movement">
+					<Attribute key="AllowedValues" value="?" />
+				</DynamicProperty>
+				
 				<DynamicProperty
 					name="Cartesian"
 					valueType="System.Boolean"
 					value="false"
 					description="Enable Cartesian linking instead of joint linking"/>
+				
 			</Properties>
 			<Bindings>
 			</Bindings>
@@ -40,4 +52,4 @@
 			</Assets>
 		</SmartComponent>
 	</lc:Library>
-</lc:LibraryCompiler> 
+</lc:LibraryCompiler>

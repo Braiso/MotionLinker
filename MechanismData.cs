@@ -384,8 +384,8 @@ namespace MotionLinker
             }
 
             // Kinematics en depuracion. Configuracion de ejes
-            _virtualMechanism.CalculateInverseKinematics(new RsTarget(_targetWobjActive, posActual), _targetToolActive,false,out var jv);
-            //_virtualMechanism.CalculateInverseKinematics(posActual, _targetWobjActive, _targetToolActive, conf, out var jv);
+            //_virtualMechanism.CalculateInverseKinematics(new RsTarget(_targetWobjActive, posActual), _targetToolActive,false,out var jv);
+            _virtualMechanism.CalculateInverseKinematics(posActual, _targetWobjActive, _targetToolActive, conf, out var jv);
 
             if (jv is null)
             {

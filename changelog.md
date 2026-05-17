@@ -46,8 +46,33 @@
 
 ### TODO
 - Lista desplegable con controladores activos
-- Ver que pasa con ExternalAxis. En principio esta implementado pero os valores no son coeherentes
 - Cambio de modo en quente
 - Calidad de conexion
 - Optimizacion de refresco de graficos
-	- DetailLevel	
+
+## [Unreleased] 16-05-2026
+
+### Added
+- Lista desplegable con controladores source disponibles
+- Lista desplegable con controladores target disponibles
+- Mensaje de reinicio en caso de cambios
+
+### Changed
+- Cambio interfaz. Añadido casilla "offline" en Source Controller
+
+### Fixed
+- Incompatible mismo GUID en source y target
+- Quitar source de posibles target
+- InverseKinematics cambiado a version con configuracion de ejes a causa del mal funcionamiento en caso de cambio de controlador. Posiblemente se liaba con la configuracion de ejes.
+
+### Notes
+
+### TODO
+- Optimizar conexion e busqueda
+- Calidad de conexion
+- Optimizacion de refresco de graficos
+- Visualizacion de tool e workobject en SyncJoint
+- Cambio de modo en quente
+- Permitir non pisar rswobj ou rstool, usar os que hai definidos anteriormente para probas de trayectoria
+- Marcar un rscontroller como "dummy"
+- Marcar un rscontroller como "usado"

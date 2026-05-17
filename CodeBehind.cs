@@ -1,4 +1,5 @@
 ﻿using ABB.Robotics.Controllers;
+using ABB.Robotics.Controllers.Configuration;
 using ABB.Robotics.Controllers.Discovery;
 using ABB.Robotics.Controllers.RapidDomain;
 using ABB.Robotics.Math;
@@ -91,13 +92,13 @@ namespace MotionLinker
             {
                 // En caso de ser tener el  mismo nombre se supone que se conecta el real con su homonimo virtual
                 oneController = true;
-                Logger.AddMessage(new LogMessage($"Same name controllers. Source is online",
+                Logger.AddMessage(new LogMessage($"Same name controllers. Source must be online",
                     LogMessageSeverity.Warning));
             }
             else
             {
                 oneController = false;
-                Logger.AddMessage(new LogMessage($"Different name controllers. Source is online or offline",
+                Logger.AddMessage(new LogMessage($"Different name controllers. Source could be online or offline",
                     LogMessageSeverity.Warning));
             }
             #endregion
@@ -185,7 +186,7 @@ namespace MotionLinker
             }
             #endregion
 
-            #region Buscar coincidencias controlador targer en controladores virtuales
+            #region Buscar coincidencias controlador target en controladores virtuales
             // En caso de haber varios se conecta con el primero
             RsIrc5Controller tgtRsCtrl = null;
             foreach (RsIrc5Controller rsctrl in RsControllers)
@@ -368,9 +369,66 @@ namespace MotionLinker
                 return;
             }
         }
-        private void OptimizeGraphicControl()
+        //
+        // Resumen:
+        //     Called to retrieve the actual value of a property attribute with the dummy value
+        //     '?'.
+        //
+        // Parámetros:
+        //   component:
+        //     Component that owns the property.
+        //
+        //   owningProperty:
+        //     Property that owns the attribute.
+        //
+        //   attributeName:
+        //     Name of the attribute to query.
+        //
+        // Devuelve:
+        //     Value of the attribute.        
+        public override string QueryPropertyAttributeValue(SmartComponent component,DynamicProperty owningProperty,string attributeName)
         {
-            GraphicControl.UpdateAll();
+            if (owningProperty.Name == "SourceController" &&
+                attributeName == "AllowedValues")
+            {
+                // Los controladores source pueden ser offline u online
+                return ControllerHelper.SearchSystemNames((bool)component.Properties["OnlineSource"].Value);
+            }
+            else if(owningProperty.Name =="TargetController")
+            {
+                // Los controladores target siempre son offline
+                return ControllerHelper.SearchSystemNames(false);
+            }
+
+            return base.QueryPropertyAttributeValue(
+                component,
+                owningProperty,
+                attributeName);
+        }
+        //
+        // Resumen:
+        //     Called when the value of a dynamic property changes.
+        //
+        // Parámetros:
+        //   component:
+        //     Component that owns the changed property.
+        //
+        //   changedProperty:
+        //     Changed property.
+        //
+        //   oldValue:
+        //     Previous value of the changed property.
+        public override void OnPropertyValueChanged(SmartComponent component, DynamicProperty changedProperty, object oldValue)
+        {
+            
+            if (changedProperty.Name == "OnlineSource")
+            {
+                component.RaisePropertyChanged(component.Properties["SourceController"]);
+            }
+            else if (Simulator.State!=SimulationState.Stopped) 
+            {
+                Logger.AddMessage(new LogMessage("Restart simulation to apply changes", "MotionLinker", LogMessageSeverity.Warning));
+            }
         }
     }
 }
