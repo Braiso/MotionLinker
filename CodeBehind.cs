@@ -87,17 +87,17 @@ namespace MotionLinker
             #endregion
 
             #region Comprobacion de identidad
-            bool oneController;
+            bool twinControllers;
             if (ctrlSource==ctrlTarget)
             {
                 // En caso de ser tener el  mismo nombre se supone que se conecta el real con su homonimo virtual
-                oneController = true;
+                twinControllers = true;
                 Logger.AddMessage(new LogMessage($"Same name controllers. Source must be online",
                     LogMessageSeverity.Warning));
             }
             else
             {
-                oneController = false;
+                twinControllers = false;
                 Logger.AddMessage(new LogMessage($"Different name controllers. Source could be online or offline",
                     LogMessageSeverity.Warning));
             }
@@ -108,7 +108,7 @@ namespace MotionLinker
             NetworkScanner scanner = new NetworkScanner();
 
             ControllerInfo[] controllers = null;
-            if (oneController)
+            if (twinControllers)
             {
                 // Mismo nombre el source deberia ser real
                 controllers = scanner.GetControllers(NetworkScannerSearchCriterias.Real);
@@ -222,7 +222,7 @@ namespace MotionLinker
                 mechData = new MechanismData(
                     srcCtrl,
                     tgtRsCtrl,
-                    oneController,
+                    twinControllers,
                     cartesian ? SyncMode.Cartesian : SyncMode.Joint);
 
                 // Datos rapid del controlado fuente
@@ -325,8 +325,8 @@ namespace MotionLinker
             if (component.StateCache.ContainsKey("MechanismData") &&
                 component.StateCache["MechanismData"] is MechanismData mechData)
             {
-                // Fallo consulta posicion con controladores virtuales
-                if (mechData.FirstRunning || mechData.OneController)
+                // Fallo consulta posicion con controladores offline
+                if (mechData.FirstRunning || mechData.TwinControllers)
                 {
                     switch (mechData.ActiveSync)
                     {

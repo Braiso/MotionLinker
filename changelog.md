@@ -76,3 +76,24 @@
 - Permitir non pisar rswobj ou rstool, usar os que hai definidos anteriormente para probas de trayectoria
 - Marcar un rscontroller como "dummy"
 - Marcar un rscontroller como "usado"
+
+### Added
+- Visualizacion de tool e workobject en SyncJoint
+- Eliminar tools y wobj al acabar la sincronizacion
+- Cache de task de movimiento sourcecontroller
+
+### Changed
+
+### Fixed
+
+### Notes
+
+### TODO
+- Optimizar conexion e busqueda
+- Calidad de conexion
+- Optimizacion de refresco de graficos
+- Cambio de modo en quente
+- Permitir non pisar rswobj ou rstool, usar os que hai definidos anteriormente para probas de trayectoria
+- Marcar un rscontroller como "dummy"
+- Marcar un rscontroller como "usado"
+- Opcion sin datos locales. Sin datos locales se puede reducir la latencia de CartesianSync

@@ -18,13 +18,15 @@ namespace MotionLinker
         // Marca de primer arranque evita "excepcion controller not response"
         // Caso raro en pruebas con controladores offline
         public bool FirstRunning { get; private set; } = false;
-        public bool OneController { get; private set; }
+        public bool TwinControllers { get; private set; }
         private Controller _sourceController; // IDisposable
         private MechanicalUnit _mechUnit; // IDisposable
+        private ControllerTask _sourceTask; //IDisposable
         private Dictionary<string, RapidData> _sourceTools; // RapidData IDisposable
         private Dictionary<string, RapidData> _sourceWobjs; // RapidData IDisposable
         private RsIrc5Controller _targetController;
         private Mechanism _virtualMechanism;
+        private RsTask _targetTask;
         private Dictionary<string, RsToolData> _targetTools;
         private Dictionary<string, RsWorkObject> _targetWobjs;
         private RsToolData _targetToolActive;
@@ -37,14 +39,16 @@ namespace MotionLinker
         public MechanismData(
             Controller sourceController,
             RsIrc5Controller targetController,
-            bool onecontroller,
+            bool twincontrollers,
             SyncMode sync)
         {
             _sourceController = sourceController ?? throw new ArgumentNullException(nameof(sourceController));
             _mechUnit = _sourceController.MotionSystem.MechanicalUnits[0];
+            _sourceTask = _sourceController.Rapid.GetTask("T_ROB1") ?? throw new InvalidOperationException("Task T_ROB1 not found");
             _targetController = targetController ?? throw new ArgumentNullException(nameof(targetController));
             _virtualMechanism = _targetController.MechanicalUnits[0].Mechanism;
-            OneController = onecontroller;
+            _targetTask = _targetController.Tasks["T_ROB1"] ?? throw new InvalidOperationException("rsTask T_ROB1 not found");
+            TwinControllers = twincontrollers;
             ActiveSync = sync;
             DefaultSync = sync;
 
@@ -263,21 +267,58 @@ namespace MotionLinker
                     wobj.Oframe.Rot.Q4)
             );
         }
+        private void RemoveDataFromStation()
+        {
+
+            // Tools
+            foreach (var tool in _targetTools.Values)
+            {
+                if (tool.Name.Equals("tool0", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                if (tool == null)
+                {
+                    Logger.AddMessage(new LogMessage(
+                        "Null tool reference. Skipping.",
+                        "MotionLinker",
+                        LogMessageSeverity.Warning));
+                    continue;
+                }
+
+                var existing = _targetTask.FindDataDeclarationFromModuleScope(tool.Name, tool.ModuleName);
+                if (existing != null)
+                {
+                    _targetTask.DataDeclarations.Remove(existing);
+                }
+            }
+
+            //wobjs
+            foreach (var wobj in _targetWobjs.Values)
+            {
+                if (wobj.Name.Equals("wobj0", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                if (wobj == null)
+                {
+                    Logger.AddMessage(new LogMessage(
+                        "Null wobj reference. Skipping.",
+                        "MotionLinker",
+                        LogMessageSeverity.Warning));
+                    continue;
+                }
+                var existing = _targetTask.FindDataDeclarationFromModuleScope(wobj.Name, wobj.ModuleName);
+                if (existing != null)
+                {
+                    _targetTask.DataDeclarations.Remove(existing);
+                }
+            }
+        }
         public void SyncJoint()
         {
             double[] jv_rax = new double[6];
 
             Stopwatch sw = Stopwatch.StartNew();
             JointTarget jt = _mechUnit.GetPosition();
-            sw.Stop();
-
-            if (sw.ElapsedMilliseconds > 100)
-            {
-                Logger.AddMessage(new LogMessage(
-                    $"High GetRobTarget latency: {sw.ElapsedMilliseconds} ms",
-                    "MotionLinker",
-                    LogMessageSeverity.Warning));
-            }
 
             // Robot axes
             jv_rax[0] = Globals.DegToRad(jt.RobAx.Rax_1);
@@ -291,15 +332,32 @@ namespace MotionLinker
             Array.Copy(jv_rax, jvActiveAxes, _virtualMechanism.NumActiveJoints);
             _virtualMechanism.SetJointValues(jvActiveAxes, false);
 
+            sw.Stop();
+
+            if (sw.ElapsedMilliseconds > 50)
+            {
+                Logger.AddMessage(new LogMessage(
+                    $"High GetRobTarget latency: {sw.ElapsedMilliseconds} ms",
+                    "MotionLinker",
+                    LogMessageSeverity.Warning));
+            }
         }
         public void SyncCartesian()
         {
             string module;
-            
-            // Scope de de motion pointer
-            ControllerTask task = _sourceController.Rapid.GetTask("T_ROB1");
+            Stopwatch sw = Stopwatch.StartNew();
 
-            var MotionScope = task.MotionPointer;
+            #region Obtener variables de posicion
+
+            string tool = _mechUnit.Tool.Name.ToLower();
+            string wobj = _mechUnit.WorkObject.Name.ToLower();
+            
+            RsRobTarget posActual = ConvertToRsRobTarget("posAct", _sourceTask.GetRobTarget());
+            //RsRobTarget posActual = ConvertToRsRobTarget("posAct", task.GetRobTarget(tool,wobj));
+            #endregion
+
+            // Conocer el scope de motion pointer para asignar tooles y wobj locales
+            var MotionScope = _sourceTask.MotionPointer;
             if (MotionScope is null)
             {
                 throw new Exception($"Motion pointer from {_sourceController.SystemName} is not available ");
@@ -308,25 +366,6 @@ namespace MotionLinker
             {
                 module = MotionScope.Module.ToLower();
             }
-
-            #region Obtener variables de posicion
-
-            string tool = _mechUnit.Tool.Name.ToLower();
-            string wobj = _mechUnit.WorkObject.Name.ToLower();
-            
-            Stopwatch sw = Stopwatch.StartNew();
-            RsRobTarget posActual = ConvertToRsRobTarget("posAct", task.GetRobTarget());
-            //RsRobTarget posActual = ConvertToRsRobTarget("posAct", task.GetRobTarget(tool,wobj));
-            sw.Stop();
-
-            if (sw.ElapsedMilliseconds > 100)
-            {
-                Logger.AddMessage(new LogMessage(
-                    $"High GetRobTarget latency: {sw.ElapsedMilliseconds} ms",
-                    "MotionLinker",
-                    LogMessageSeverity.Warning));
-            }
-            #endregion
 
             #region Resolver tool (tooldata->rsTooldata) 
 
@@ -401,6 +440,17 @@ namespace MotionLinker
                 _virtualMechanism.SetJointValues(jvActiveAxes, false);
             }
             #endregion
+
+            sw.Stop();
+
+            if (sw.ElapsedMilliseconds > 50)
+            {
+                Logger.AddMessage(new LogMessage(
+                    $"High GetRobTarget latency: {sw.ElapsedMilliseconds} ms",
+                    "MotionLinker",
+                    LogMessageSeverity.Warning));
+            }
+
         }
         public void InitRapidDataCache()
         {
@@ -413,10 +463,8 @@ namespace MotionLinker
             RapidSymbolSearchProperties sProp = RapidSymbolSearchProperties.CreateDefaultForData();
             sProp.Types = SymbolTypes.Persistent;
 
-            ControllerTask task =_sourceController.Rapid.GetTask("T_ROB1");
-
             // Se exporta cada modulo por separado
-            foreach (Module module in task.GetModules())
+            foreach (Module module in _sourceTask.GetModules())
             {
                 tooldatas = module.SearchRapidSymbol(sProp,"tooldata",System.String.Empty);
                 wobjdatas = module.SearchRapidSymbol(sProp,"wobjdata",System.String.Empty);
@@ -525,17 +573,6 @@ namespace MotionLinker
         }
         public void AddDataToStation()
         {
-            _targetController.Tasks.TryGetTask("T_ROB1", out var task);
-
-            if (task == null)
-            {
-                Logger.AddMessage(new LogMessage(
-                    "Visualization error: Task 'T_ROB1' not found",
-                    "MotionLinker",
-                    LogMessageSeverity.Error));
-
-                return;
-            }
 
             // Tools
             foreach (var tool in _targetTools.Values)
@@ -552,12 +589,12 @@ namespace MotionLinker
                     continue;
                 }
 
-                var existing = task.FindDataDeclarationFromModuleScope(tool.Name, tool.ModuleName);
+                var existing = _targetTask.FindDataDeclarationFromModuleScope(tool.Name, tool.ModuleName);
                 if (existing != null)
                 {
-                    task.DataDeclarations.Remove(existing);
+                    _targetTask.DataDeclarations.Remove(existing);
                 }
-                task.DataDeclarations.Add(tool);
+                _targetTask.DataDeclarations.Add(tool);
             }
 
             //wobjs
@@ -574,12 +611,12 @@ namespace MotionLinker
                         LogMessageSeverity.Warning));
                     continue;
                 }
-                var existing = task.FindDataDeclarationFromModuleScope(wobj.Name, wobj.ModuleName);
+                var existing = _targetTask.FindDataDeclarationFromModuleScope(wobj.Name, wobj.ModuleName);
                 if (existing != null)
                 {
-                    task.DataDeclarations.Remove(existing);
+                    _targetTask.DataDeclarations.Remove(existing);
                 }
-                task.DataDeclarations.Add(wobj);
+                _targetTask.DataDeclarations.Add(wobj);
             }
         }
         private void OnControllerStateChanged(object sender, StateChangedEventArgs e)
@@ -661,6 +698,13 @@ namespace MotionLinker
         {
             if (_disposedValue)
                 return;
+
+            // Eliminar datos de tool y wobj usados
+            RemoveDataFromStation();
+
+            // Tarea de movimiento source controller
+            SafeDispose(() => _sourceTask.Dispose(), "Task.Dispose");
+            _sourceTask= null;
 
             // _sourceTools: RapidData
             if (_sourceTools != null)
