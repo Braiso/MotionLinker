@@ -89,7 +89,6 @@
 
 ### Fixed
 - Latencia SyncCartesian
-- Ocultaciond e parametro "Unidades mecánicas exeternas" con CartesianSync a false
 
 ### Notes
 
@@ -102,3 +101,27 @@
 - Marcar un rscontroller como "dummy"
 - Marcar un rscontroller como "usado"
 - Opcion sin datos locales. Sin datos locales se puede reducir la latencia de CartesianSync
+
+
+## [Unreleased] 16-05-2026
+
+### Added
+- Ocultacion de parametro "Unidades mecánicas exeternas" con CartesianSync a false
+
+### Changed
+- InverseKinematics Async
+
+### Fixed
+
+### Notes
+
+### TODO
+- Optimizar conexion e busqueda
+- Calidad de conexion
+- Optimizacion de refresco de graficos
+- Cambio de modo en quente
+- Permitir non pisar rswobj ou rstool, usar os que hai definidos anteriormente para probas de trayectoria
+- Marcar un rscontroller como "dummy"
+- Marcar un rscontroller como "usado"
+- Opcion sin datos locales. Sin datos locales se puede reducir la latencia de CartesianSync
+

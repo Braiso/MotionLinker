@@ -33,6 +33,7 @@ namespace MotionLinker
         private RsToolData _targetToolActive;
         private RsWorkObject _targetWobjActive;
         private bool _disposedValue;
+        private int _maxLatency=30;
 
         public SyncMode ActiveSync { get; private set; }
         public SyncMode DefaultSync { get; private set; }
@@ -402,7 +403,7 @@ namespace MotionLinker
 
             sw.Stop();
 
-            if (sw.ElapsedMilliseconds > 50)
+            if (sw.ElapsedMilliseconds > _maxLatency)
             {
                 Logger.AddMessage(new LogMessage(
                     $"High GetRobTarget latency: {sw.ElapsedMilliseconds} ms",
@@ -479,7 +480,7 @@ namespace MotionLinker
 
             sw.Stop();
 
-            if (sw.ElapsedMilliseconds > 70)
+            if (sw.ElapsedMilliseconds > _maxLatency)
             {
                 Logger.AddMessage(new LogMessage(
                     $"High GetRobTarget latency: {sw.ElapsedMilliseconds} ms",
@@ -493,7 +494,6 @@ namespace MotionLinker
         }
         public void SyncCartesianUfmec()
         {
-            Stopwatch sw = Stopwatch.StartNew();
 
             #region Obtener variables de posicion
             string tool = _mechUnit.Tool.Name.ToLower();
@@ -539,9 +539,21 @@ namespace MotionLinker
                 return;
             }
 
+            Stopwatch sw = Stopwatch.StartNew();
             // Kinematics en depuracion. Configuracion de ejes
             //_virtualMechanism.CalculateInverseKinematics(new RsTarget(_targetWobjActive, posActual), _targetToolActive,false,out var jv);
             _virtualMechanism.CalculateInverseKinematics(posActual, _targetWobjActive, _targetToolActive, conf, out var jv);
+
+            sw.Stop();
+
+            if (sw.ElapsedMilliseconds > _maxLatency)
+            {
+                Logger.AddMessage(new LogMessage(
+                    $"High GetRobTarget latency: {sw.ElapsedMilliseconds} ms",
+                    "MotionLinker",
+                    LogMessageSeverity.Warning));
+            }
+
 
             if (jv is null)
             {
@@ -557,16 +569,6 @@ namespace MotionLinker
                 _virtualMechanism.SetJointValues(jvActiveAxes, false);
             }
             #endregion
-
-            sw.Stop();
-
-            if (sw.ElapsedMilliseconds > 70)
-            {
-                Logger.AddMessage(new LogMessage(
-                    $"High GetRobTarget latency: {sw.ElapsedMilliseconds} ms",
-                    "MotionLinker",
-                    LogMessageSeverity.Warning));
-            }
 
         }
         public void InitRapidDataCache()

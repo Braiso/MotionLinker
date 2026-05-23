@@ -266,7 +266,6 @@ namespace MotionLinker
             }
             #endregion
         }
-
         //
         // Resumen:
         //     Called when simulation is stopped.
