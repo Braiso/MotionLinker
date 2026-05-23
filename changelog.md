@@ -114,6 +114,8 @@
 ### Fixed
 
 ### Notes
+- IK en pruebas
+- Posible eliminacion propieaded CooridnatedWObjs: Uso sobrecarga IK con RsWorkObject
 
 ### TODO
 - Optimizar conexion e busqueda

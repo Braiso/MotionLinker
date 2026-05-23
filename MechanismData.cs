@@ -6,20 +6,15 @@ using ABB.Robotics.RobotStudio;
 using ABB.Robotics.RobotStudio.Stations;
 using System;
 using System.Collections.Generic;
-using System.ComponentModel;
 using System.Diagnostics;
 using System.Linq;
 using ControllerTask = ABB.Robotics.Controllers.RapidDomain.Task;
+using Task = System.Threading.Tasks.Task;
 
 namespace MotionLinker
 {
     public class MechanismData : IDisposable
     {
-        // Marca de primer arranque evita "excepcion controller not response"
-        // Caso raro en pruebas con controladores offline
-        public bool FirstRunning { get; private set; } = false;
-        public bool TwinControllers { get; private set; }
-        public bool CoordinatedWObjs { get; private set; }
         private Controller _sourceController; // IDisposable
         private MechanicalUnit _mechUnit; // IDisposable
         private ControllerTask _sourceTask; //IDisposable
@@ -33,8 +28,14 @@ namespace MotionLinker
         private RsToolData _targetToolActive;
         private RsWorkObject _targetWobjActive;
         private bool _disposedValue;
-        private int _maxLatency=30;
-
+        private int _maxLatency=50;
+        private int _ikFailCount = 0;
+        private const int MaxIkFails = 50;
+        // Marca de primer arranque evita "excepcion controller not response"
+        // Caso raro en pruebas con controladores offline
+        public bool FirstRunning { get; private set; } = false;
+        public bool TwinControllers { get; private set; }
+        public bool CoordinatedWObjs { get; private set; }
         public SyncMode ActiveSync { get; private set; }
         public SyncMode DefaultSync { get; private set; }
 
@@ -354,7 +355,6 @@ namespace MotionLinker
             _targetWobjActive.Visible = true;
             _targetWobjActive.ShowName = true;
         }
-
         public void SyncJoint()
         {
             Stopwatch sw = Stopwatch.StartNew();
@@ -406,101 +406,21 @@ namespace MotionLinker
             if (sw.ElapsedMilliseconds > _maxLatency)
             {
                 Logger.AddMessage(new LogMessage(
-                    $"High GetRobTarget latency: {sw.ElapsedMilliseconds} ms",
+                    $"High JointTarget latency: {sw.ElapsedMilliseconds} ms",
                     "MotionLinker",
                     LogMessageSeverity.Warning));
             }
         }
-        public void SyncCartesian()
+        public async Task SyncCartesianAsync(bool coordinateWobj)
         {
-            Stopwatch sw = Stopwatch.StartNew();
+
+            Stopwatch sw = Stopwatch .StartNew();
 
             #region Obtener variables de posicion
             string tool = _mechUnit.Tool.Name.ToLower();
             string wobj = _mechUnit.WorkObject.Name.ToLower();
 
-            RobTarget pActualSource = _sourceTask.GetRobTarget();
-            RsRobTarget posActual = ConvertToRsRobTarget("posAct", pActualSource);
-            #endregion
-
-            #region Scope de datos
-            // Conocer el scope de motion pointer para asignar tooles y wobj locales
-            var MotionScope = _sourceTask.MotionPointer;
-            string module;
-            if (MotionScope is null)
-            {
-                throw new Exception($"Motion pointer from {_sourceController.SystemName} is not available ");
-            }
-            else
-            {
-                module = MotionScope.Module.ToLower();
-            }
-            #endregion
-
-            //Resolver tool (tooldata -> rsTooldata) 
-            ActualTool(module, tool);
-
-            //Resolver tool (wobjdata -> rsWobjdata) 
-            ActualWobj(module, wobj);
-
-            #region InverseKinematics
-            //Matrix4   pose
-            //double[]  referenceJointValues
-            //double[]  integratedUnitsJointValues
-            //Matrix4   toolMat
-            //bool      fixedObject
-            //double[]  resultJointVector           Out parameter containing the result.
-
-            //Comprobar consistencia de snapshot de posicion
-            if (tool != _mechUnit.Tool.Name.ToLower() || module != MotionScope.Module.ToLower() || wobj != _mechUnit.WorkObject.Name.ToLower())
-            {
-                return;
-            }
-
-            // IK
-            bool success;
-            success = _virtualMechanism.CalculateInverseKinematics(_targetWobjActive.UserFrame.Matrix.Multiply(posActual.Frame.Matrix),
-                                                            null,
-                                                            null,
-                                                            _targetToolActive.Frame.Matrix,
-                                                            _targetWobjActive.UserFrameProgrammed,
-                                                            out double[] resultJointVector);
-
-            if (success)
-            {
-                double[] jvActiveAxes = new double[_virtualMechanism.NumActiveJoints];
-                Array.Copy(resultJointVector, jvActiveAxes, _virtualMechanism.NumActiveJoints);
-                _virtualMechanism.SetJointValues(jvActiveAxes, false);
-            }
-            else
-            {
-                throw new Exception($"Inverse Kinematics is failed.Unreachable target.\nTool: {_targetToolActive.Name}" +
-                    $"\nWobj: {_targetWobjActive.Name}.");
-            }
-
-            sw.Stop();
-
-            if (sw.ElapsedMilliseconds > _maxLatency)
-            {
-                Logger.AddMessage(new LogMessage(
-                    $"High GetRobTarget latency: {sw.ElapsedMilliseconds} ms",
-                    "MotionLinker",
-                    LogMessageSeverity.Warning));
-            }
-
-            return;
-            #endregion
-
-        }
-        public void SyncCartesianUfmec()
-        {
-
-            #region Obtener variables de posicion
-            string tool = _mechUnit.Tool.Name.ToLower();
-            string wobj = _mechUnit.WorkObject.Name.ToLower();
-            
             RsRobTarget posActual = ConvertToRsRobTarget("posAct", _sourceTask.GetRobTarget());
-            //RsRobTarget posActual = ConvertToRsRobTarget("posAct", task.GetRobTarget(tool,wobj));
             #endregion
 
             #region Scope de datos
@@ -522,7 +442,7 @@ namespace MotionLinker
 
             //Resolver tool (wobjdata -> rsWobjdata) 
             ActualWobj(module, wobj);
-            
+
             #region Calcular y transmitir posicion (controller->rsController)
 
             int[] conf = new int[]
@@ -539,37 +459,56 @@ namespace MotionLinker
                 return;
             }
 
-            Stopwatch sw = Stopwatch.StartNew();
-            // Kinematics en depuracion. Configuracion de ejes
-            //_virtualMechanism.CalculateInverseKinematics(new RsTarget(_targetWobjActive, posActual), _targetToolActive,false,out var jv);
-            _virtualMechanism.CalculateInverseKinematics(posActual, _targetWobjActive, _targetToolActive, conf, out var jv);
+
+            double[] jv;
+            if (coordinateWobj)
+            {
+                // IK CalculateInverseKinematicsAsync(posActual, _targetWobjActive, _targetToolActive, conf);
+                jv = await _virtualMechanism.CalculateInverseKinematicsAsync(posActual, _targetWobjActive, _targetToolActive, conf);
+            }
+            else
+            {
+                // IK CalculateInverseKinematics(_targetWobjActive.UserFrame.Matrix.Multiply(posActual.Frame.Matrix)
+                jv = await _virtualMechanism.CalculateInverseKinematicsAsync(_targetWobjActive.UserFrame.Matrix.Multiply(posActual.Frame.Matrix),
+                                                                _targetToolActive.Frame.Matrix,
+                                                                false);
+            }
+
+            if (jv is null)
+            {
+                // Tolerancia estados transitorios en el arranque
+                _ikFailCount++;
+
+                if (_ikFailCount >= MaxIkFails)
+                {
+                    throw new Exception(
+                        $"Inverse Kinematics failed after {_ikFailCount} attempts." +
+                        $"\nTool: {_targetToolActive.Name}" +
+                        $"\nWobj: {_targetWobjActive.Name}" +
+                        $"\nPos: [[{Math.Round(posActual.Frame.X*1000,2)},{Math.Round(posActual.Frame.Y * 1000,2)},{Math.Round(posActual.Frame.Z * 1000, 2)}]," +
+                        $"[{Math.Round(posActual.Frame.Matrix.Quaternion.q1,5)},{Math.Round(posActual.Frame.Matrix.Quaternion.q2, 5)}," +
+                        $"{Math.Round(posActual.Frame.Matrix.Quaternion.q3, 5)},{Math.Round(posActual.Frame.Matrix.Quaternion.q4, 5)}]");
+                }
+            }
+            else
+            {
+                double[] jvActiveAxes = new double[_virtualMechanism.NumActiveJoints];
+                Array.Copy(jv, jvActiveAxes, _virtualMechanism.NumActiveJoints);
+
+                _virtualMechanism.SetJointValues(jvActiveAxes, false);
+            }
+            _ikFailCount = 0;
+            #endregion
 
             sw.Stop();
 
             if (sw.ElapsedMilliseconds > _maxLatency)
             {
                 Logger.AddMessage(new LogMessage(
-                    $"High GetRobTarget latency: {sw.ElapsedMilliseconds} ms",
+                    $"High IK latency: {sw.ElapsedMilliseconds} ms",
                     "MotionLinker",
                     LogMessageSeverity.Warning));
             }
-
-
-            if (jv is null)
-            {
-                throw new Exception($"Inverse Kinematics is failed.Unreachable target.\nTool: {_targetToolActive.Name}" +
-                    $"\nWobj: {_targetWobjActive.Name}.");
-            }
-            else
-            {
-
-                double[] jvActiveAxes = new double[_virtualMechanism.NumActiveJoints];
-                Array.Copy(jv, jvActiveAxes, _virtualMechanism.NumActiveJoints);
-
-                _virtualMechanism.SetJointValues(jvActiveAxes, false);
-            }
-            #endregion
-
         }
         public void InitRapidDataCache()
         {

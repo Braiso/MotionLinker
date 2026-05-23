@@ -10,6 +10,7 @@ using RobotStudio.API.Internal;
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Diagnostics.Eventing.Reader;
 using System.Dynamic;
 using System.Linq;
@@ -35,6 +36,8 @@ namespace MotionLinker
     {
 
         private bool _logging = false;
+        private Stopwatch _stepWatch = Stopwatch.StartNew();
+        private long _lastTick = 0;
 
         // Secuencia de simulacion
         // 1. Llama OnSimulationStep()
@@ -317,21 +320,7 @@ namespace MotionLinker
         // Comentarios:
         //     This method is called after the Virtual Controller time step and after robots
         //     are moved. It is allowed to return null if the method executes synchronously.
-        public override Task OnSimulationStepEndAsync(SmartComponent component, double simulationTime)
-        {
-            return null;
-        }
-        /// <summary>
-        /// Called during simulation.
-        /// </summary>
-        /// <param name="component"> Simulated component. </param>
-        /// <param name="simulationTime"> Time (in ms) for the current simulation step. </param>
-        /// <param name="previousTime"> Time (in ms) for the previous simulation step. </param>
-        /// <remarks>
-        /// For this method to be called, the component must be marked with
-        /// simulate="true" in the xml file.
-        /// </remarks>
-        public override void OnSimulationStep(SmartComponent component, double simulationTime, double previousTime)
+        public override async Task OnSimulationStepEndAsync(SmartComponent component, double simulationTime)
         {
             const double interval = 5000.0;
 
@@ -360,14 +349,7 @@ namespace MotionLinker
                             // Sincronismo por posicion cartesiana
                             try
                             {
-                                if (mechData.CoordinatedWObjs)
-                                {
-                                    mechData.SyncCartesianUfmec();
-                                }
-                                else
-                                {
-                                    mechData.SyncCartesian();
-                                }
+                                await mechData.SyncCartesianAsync(mechData.CoordinatedWObjs);
                             }
                             catch (Exception ex)
                             {
@@ -378,16 +360,45 @@ namespace MotionLinker
                     }
                     GraphicControl.UpdateAll();
                 }
+                // Se evita un fallo entre controladores offline cuando el spurce no se ha movido ni una vez
                 else if (simulationTime - (double)component.StateCache["lastTime"] >= interval)
-                    {
-                        component.StateCache["lastTime"] = simulationTime;
-                        Logger.AddMessage(new LogMessage($" Waiting for first running of controller source", "MotionLinker", LogMessageSeverity.Warning));
-                    }                
+                {
+                    component.StateCache["lastTime"] = simulationTime;
+                    Logger.AddMessage(new LogMessage($" Waiting for first running of controller source", "MotionLinker", LogMessageSeverity.Warning));
+                }
             }
             else
             {
                 return;
             }
+        }
+        /// <summary>
+        /// Called during simulation.
+        /// </summary>
+        /// <param name="component"> Simulated component. </param>
+        /// <param name="simulationTime"> Time (in ms) for the current simulation step. </param>
+        /// <param name="previousTime"> Time (in ms) for the previous simulation step. </param>
+        /// <remarks>
+        /// For this method to be called, the component must be marked with
+        /// simulate="true" in the xml file.
+        /// </remarks>
+        public override void OnSimulationStep(SmartComponent component, double simulationTime, double previousTime)
+        {
+            long now = _stepWatch.ElapsedMilliseconds;
+
+            if (_lastTick != 0 && false)
+            {
+                long realDelta = now - _lastTick;
+
+                Logger.AddMessage(
+                    new LogMessage(
+                        $"Tiempo real entre steps: {realDelta} ms",
+                        "MotionLinker"));
+            }
+
+            _lastTick = now;
+
+            //GraphicControl.UpdateAll();
         }
         //
         // Resumen:
