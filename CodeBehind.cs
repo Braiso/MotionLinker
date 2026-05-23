@@ -6,6 +6,7 @@ using ABB.Robotics.Math;
 using ABB.Robotics.RobotStudio;
 using ABB.Robotics.RobotStudio.Stations;
 using ABB.Robotics.RobotStudio.Stations.Forms;
+using RobotStudio.API.Internal;
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -69,7 +70,19 @@ namespace MotionLinker
             {
                 Logger.AddMessage(new LogMessage("Error reading Cartesian mode property", ex.Message,"MotionLinker", LogMessageSeverity.Error));
                 return;
-            }        
+            }
+
+            // Tipo de sincronizacion
+            bool coordinatedWObjs = false;
+            try
+            {
+                coordinatedWObjs = Convert.ToBoolean(component.Properties["CoordinatedWObjs"].Value);
+            }
+            catch (Exception ex)
+            {
+                Logger.AddMessage(new LogMessage("Error reading CoordinatedWObjs property", ex.Message, "MotionLinker", LogMessageSeverity.Error));
+                return;
+            }
 
             // Validacion propiedades
             if (string.IsNullOrWhiteSpace(ctrlSource))
@@ -223,6 +236,7 @@ namespace MotionLinker
                     srcCtrl,
                     tgtRsCtrl,
                     twinControllers,
+                    coordinatedWObjs,
                     cartesian ? SyncMode.Cartesian : SyncMode.Joint);
 
                 // Datos rapid del controlado fuente
@@ -347,7 +361,14 @@ namespace MotionLinker
                             // Sincronismo por posicion cartesiana
                             try
                             {
-                                mechData.SyncCartesian();
+                                if (mechData.CoordinatedWObjs)
+                                {
+                                    mechData.SyncCartesianUfmec();
+                                }
+                                else
+                                {
+                                    mechData.SyncCartesian();
+                                }
                             }
                             catch (Exception ex)
                             {
@@ -392,12 +413,19 @@ namespace MotionLinker
                 attributeName == "AllowedValues")
             {
                 // Los controladores source pueden ser offline u online
-                return ControllerHelper.SearchSystemNames((bool)component.Properties["OnlineSource"].Value);
+                if ((bool)component.Properties["OnlineSource"].Value)
+                {
+                    return ControllerHelper.SearchSystemNames(NetworkScannerSearchCriterias.Real);
+                }
+                else
+                {
+                    return ControllerHelper.SearchSystemNames();
+                }
             }
-            else if(owningProperty.Name =="TargetController")
+            else if (owningProperty.Name == "TargetController")
             {
                 // Los controladores target siempre son offline
-                return ControllerHelper.SearchSystemNames(false);
+                return ControllerHelper.SearchSystemNames(NetworkScannerSearchCriterias.Virtual);
             }
 
             return base.QueryPropertyAttributeValue(
@@ -425,7 +453,28 @@ namespace MotionLinker
             {
                 component.RaisePropertyChanged(component.Properties["SourceController"]);
             }
-            else if (Simulator.State!=SimulationState.Stopped) 
+            else if (changedProperty.Name == "Cartesian")
+            {
+                bool cartesian =
+                    Convert.ToBoolean(changedProperty.Value);
+
+                // Si Cartesian está desactivado
+                if (cartesian)
+                {
+                    component.Properties["CoordinatedWObjs"].ReadOnly = false;
+                }
+                else
+                {
+                    component.Properties["CoordinatedWObjs"].Value = false;
+                    component.Properties["CoordinatedWObjs"].ReadOnly = true;
+                }
+
+                component.RaisePropertyChanged(
+                    component.Properties["CoordinatedWObjs"]);
+            }
+
+
+            if (Simulator.State!=SimulationState.Stopped && Simulator.State != SimulationState.Ready) 
             {
                 Logger.AddMessage(new LogMessage("Restart simulation to apply changes", "MotionLinker", LogMessageSeverity.Warning));
             }

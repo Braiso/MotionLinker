@@ -77,14 +77,19 @@
 - Marcar un rscontroller como "dummy"
 - Marcar un rscontroller como "usado"
 
+## [Unreleased] 16-05-2026
+
 ### Added
 - Visualizacion de tool e workobject en SyncJoint
 - Eliminar tools y wobj al acabar la sincronizacion
 - Cache de task de movimiento sourcecontroller
+- Bool "Unidades mecanicas externas"
 
 ### Changed
 
 ### Fixed
+- Latencia SyncCartesian
+- Ocultaciond e parametro "Unidades mecánicas exeternas" con CartesianSync a false
 
 ### Notes
 

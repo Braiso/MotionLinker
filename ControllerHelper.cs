@@ -45,22 +45,23 @@ namespace MotionLinker
                 return null;
             }
         }
-        public static string SearchSystemNames(bool online, bool logging = false)
+        public static string SearchSystemNames(NetworkScannerSearchCriterias criteria = NetworkScannerSearchCriterias.None, bool logging = false)
         {
             if (logging) Logger.AddMessage(new LogMessage("Inicio busqueda controladores", "MotionLinker"));
             
             NetworkScanner scanner = new NetworkScanner();
             ControllerInfo[] controllers = null;
 
-            if (online)
-            {
-                controllers = scanner.GetControllers(NetworkScannerSearchCriterias.Real);
-            }
-            else
+            if (criteria==NetworkScannerSearchCriterias.None)
             {
                 controllers = scanner.GetControllers();
             }
+            else
+            {
+                controllers = scanner.GetControllers(criteria);
+            }
 
+            
             if (controllers == null || controllers.Length == 0)
             {
                 Logger.AddMessage(
@@ -86,7 +87,6 @@ namespace MotionLinker
                             "MotionLinker"));
                 }
             }
-
             return string.Join(";", names);
         }
     }

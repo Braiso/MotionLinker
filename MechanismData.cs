@@ -19,6 +19,7 @@ namespace MotionLinker
         // Caso raro en pruebas con controladores offline
         public bool FirstRunning { get; private set; } = false;
         public bool TwinControllers { get; private set; }
+        public bool CoordinatedWObjs { get; private set; }
         private Controller _sourceController; // IDisposable
         private MechanicalUnit _mechUnit; // IDisposable
         private ControllerTask _sourceTask; //IDisposable
@@ -40,6 +41,7 @@ namespace MotionLinker
             Controller sourceController,
             RsIrc5Controller targetController,
             bool twincontrollers,
+            bool coordinatedWObjs,
             SyncMode sync)
         {
             _sourceController = sourceController ?? throw new ArgumentNullException(nameof(sourceController));
@@ -49,6 +51,7 @@ namespace MotionLinker
             _virtualMechanism = _targetController.MechanicalUnits[0].Mechanism;
             _targetTask = _targetController.Tasks["T_ROB1"] ?? throw new InvalidOperationException("rsTask T_ROB1 not found");
             TwinControllers = twincontrollers;
+            CoordinatedWObjs = coordinatedWObjs;
             ActiveSync = sync;
             DefaultSync = sync;
 
@@ -313,6 +316,44 @@ namespace MotionLinker
                 }
             }
         }
+        private void ActualTool(string module,string tool)
+        {
+            // Obtener rsTooldata
+            if (_targetToolActive != null)
+            {
+                _targetToolActive.Visible = false;
+                _targetToolActive.ShowName = false;
+            }
+            string localKey = $"{module}_{tool}";
+
+            // Primero se busca valor local, si no lo hay se busca global
+            if (!_targetTools.TryGetValue(localKey, out _targetToolActive) &&
+                !_targetTools.TryGetValue(tool, out _targetToolActive))
+            {
+                throw new Exception($"RsToolData '{tool}' not found");
+            }
+            _targetToolActive.Visible = true;
+            _targetToolActive.ShowName = true;
+        }
+        private void ActualWobj(string module, string wobj)
+        {
+            // Obtener RsWorkObject
+            if (_targetWobjActive != null)
+            {
+                _targetWobjActive.Visible = false;
+                _targetWobjActive.ShowName = false;
+            }
+            string localKeyWobj = $"{module}_{wobj}";
+
+            if (!_targetWobjs.TryGetValue(localKeyWobj, out _targetWobjActive) &&
+                !_targetWobjs.TryGetValue(wobj, out _targetWobjActive))
+            {
+                throw new Exception($"RsWorkObject '{wobj}' not found");
+            }
+            _targetWobjActive.Visible = true;
+            _targetWobjActive.ShowName = true;
+        }
+
         public void SyncJoint()
         {
             Stopwatch sw = Stopwatch.StartNew();
@@ -353,44 +394,11 @@ namespace MotionLinker
             }
             #endregion
 
-            #region Resolver tool (tooldata->rsTooldata) 
+            //Resolver tool (tooldata -> rsTooldata) 
+            ActualTool(module, tool);
 
-            // Obtener rsTooldata
-            if (_targetToolActive != null)
-            {
-                _targetToolActive.Visible = false;
-                _targetToolActive.ShowName = false;
-            }
-            string localKey = $"{module}_{tool}";
-
-            // Primero se busca valor local, si no lo hay se busca global
-            if (!_targetTools.TryGetValue(localKey, out _targetToolActive) &&
-                !_targetTools.TryGetValue(tool, out _targetToolActive))
-            {
-                throw new Exception($"RsToolData '{tool}' not found");
-            }
-            _targetToolActive.Visible = true;
-            _targetToolActive.ShowName = true;
-            #endregion
-
-            #region Resolver wobjdata (wobjdata->rsWobjdata)
-
-            // Obtener RsWorkObject
-            if (_targetWobjActive != null)
-            {
-                _targetWobjActive.Visible = false;
-                _targetWobjActive.ShowName = false;
-            }
-            string localKeyWobj = $"{module}_{wobj}";
-
-            if (!_targetWobjs.TryGetValue(localKeyWobj, out _targetWobjActive) &&
-                !_targetWobjs.TryGetValue(wobj, out _targetWobjActive))
-            {
-                throw new Exception($"RsWorkObject '{wobj}' not found");
-            }
-            _targetWobjActive.Visible = true;
-            _targetWobjActive.ShowName = true;
-            #endregion
+            //Resolver tool (wobjdata -> rsWobjdata) 
+            ActualWobj(module, wobj);
 
             sw.Stop();
 
@@ -407,7 +415,87 @@ namespace MotionLinker
             Stopwatch sw = Stopwatch.StartNew();
 
             #region Obtener variables de posicion
+            string tool = _mechUnit.Tool.Name.ToLower();
+            string wobj = _mechUnit.WorkObject.Name.ToLower();
 
+            RobTarget pActualSource = _sourceTask.GetRobTarget();
+            RsRobTarget posActual = ConvertToRsRobTarget("posAct", pActualSource);
+            #endregion
+
+            #region Scope de datos
+            // Conocer el scope de motion pointer para asignar tooles y wobj locales
+            var MotionScope = _sourceTask.MotionPointer;
+            string module;
+            if (MotionScope is null)
+            {
+                throw new Exception($"Motion pointer from {_sourceController.SystemName} is not available ");
+            }
+            else
+            {
+                module = MotionScope.Module.ToLower();
+            }
+            #endregion
+
+            //Resolver tool (tooldata -> rsTooldata) 
+            ActualTool(module, tool);
+
+            //Resolver tool (wobjdata -> rsWobjdata) 
+            ActualWobj(module, wobj);
+
+            #region InverseKinematics
+            //Matrix4   pose
+            //double[]  referenceJointValues
+            //double[]  integratedUnitsJointValues
+            //Matrix4   toolMat
+            //bool      fixedObject
+            //double[]  resultJointVector           Out parameter containing the result.
+
+            //Comprobar consistencia de snapshot de posicion
+            if (tool != _mechUnit.Tool.Name.ToLower() || module != MotionScope.Module.ToLower() || wobj != _mechUnit.WorkObject.Name.ToLower())
+            {
+                return;
+            }
+
+            // IK
+            bool success;
+            success = _virtualMechanism.CalculateInverseKinematics(_targetWobjActive.UserFrame.Matrix.Multiply(posActual.Frame.Matrix),
+                                                            null,
+                                                            null,
+                                                            _targetToolActive.Frame.Matrix,
+                                                            _targetWobjActive.UserFrameProgrammed,
+                                                            out double[] resultJointVector);
+
+            if (success)
+            {
+                double[] jvActiveAxes = new double[_virtualMechanism.NumActiveJoints];
+                Array.Copy(resultJointVector, jvActiveAxes, _virtualMechanism.NumActiveJoints);
+                _virtualMechanism.SetJointValues(jvActiveAxes, false);
+            }
+            else
+            {
+                throw new Exception($"Inverse Kinematics is failed.Unreachable target.\nTool: {_targetToolActive.Name}" +
+                    $"\nWobj: {_targetWobjActive.Name}.");
+            }
+
+            sw.Stop();
+
+            if (sw.ElapsedMilliseconds > 70)
+            {
+                Logger.AddMessage(new LogMessage(
+                    $"High GetRobTarget latency: {sw.ElapsedMilliseconds} ms",
+                    "MotionLinker",
+                    LogMessageSeverity.Warning));
+            }
+
+            return;
+            #endregion
+
+        }
+        public void SyncCartesianUfmec()
+        {
+            Stopwatch sw = Stopwatch.StartNew();
+
+            #region Obtener variables de posicion
             string tool = _mechUnit.Tool.Name.ToLower();
             string wobj = _mechUnit.WorkObject.Name.ToLower();
             
@@ -429,46 +517,13 @@ namespace MotionLinker
             }
             #endregion
 
-            #region Resolver tool (tooldata->rsTooldata) 
+            //Resolver tool (tooldata -> rsTooldata) 
+            ActualTool(module, tool);
 
-            // Obtener rsTooldata
-            if (_targetToolActive != null)
-            {
-                _targetToolActive.Visible = false;
-                _targetToolActive.ShowName = false;
-            }
-            string localKey = $"{module}_{tool}";
-
-            // Primero se busca valor local, si no lo hay se busca global
-            if (!_targetTools.TryGetValue(localKey, out _targetToolActive) &&
-                !_targetTools.TryGetValue(tool, out _targetToolActive))
-            {
-                throw new Exception($"RsToolData '{tool}' not found");
-            }
-            _targetToolActive.Visible = true;
-            _targetToolActive.ShowName = true;
-            #endregion
-
-            #region Resolver wobjdata (wobjdata->rsWobjdata)
-
-            // Obtener RsWorkObject
-            if (_targetWobjActive != null)
-            {
-                _targetWobjActive.Visible = false;
-                _targetWobjActive.ShowName = false;
-            }
-            string localKeyWobj = $"{module}_{wobj}";
-
-            if (!_targetWobjs.TryGetValue(localKeyWobj, out _targetWobjActive) &&
-                !_targetWobjs.TryGetValue(wobj, out _targetWobjActive))
-            {
-                throw new Exception($"RsWorkObject '{wobj}' not found");
-            }
-            _targetWobjActive.Visible = true;
-            _targetWobjActive.ShowName = true;
-            #endregion
-
-            #region Transmitir posicion (controller->rsController)
+            //Resolver tool (wobjdata -> rsWobjdata) 
+            ActualWobj(module, wobj);
+            
+            #region Calcular y transmitir posicion (controller->rsController)
 
             int[] conf = new int[]
             {
@@ -505,7 +560,7 @@ namespace MotionLinker
 
             sw.Stop();
 
-            if (sw.ElapsedMilliseconds > 50)
+            if (sw.ElapsedMilliseconds > 70)
             {
                 Logger.AddMessage(new LogMessage(
                     $"High GetRobTarget latency: {sw.ElapsedMilliseconds} ms",

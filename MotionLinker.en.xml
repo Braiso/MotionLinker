@@ -11,7 +11,8 @@
 		<DynamicProperty name="TargetController"/>
 
 		<DynamicProperty name="Cartesian"/>
+		
+		<DynamicProperty name="CoordinatedWObjs"/>
 
-		<DynamicProperty name="EvenNumbers" description="Sample Property Description"/>
 	</SmartComponent>
 </LibraryResource>
