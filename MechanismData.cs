@@ -315,9 +315,10 @@ namespace MotionLinker
         }
         public void SyncJoint()
         {
-            double[] jv_rax = new double[6];
-
             Stopwatch sw = Stopwatch.StartNew();
+
+            #region Obtener posicion por ejes y mover mecanismo target
+            double[] jv_rax = new double[6];
             JointTarget jt = _mechUnit.GetPosition();
 
             // Robot axes
@@ -331,6 +332,65 @@ namespace MotionLinker
             double[] jvActiveAxes = new double[_virtualMechanism.NumActiveJoints];
             Array.Copy(jv_rax, jvActiveAxes, _virtualMechanism.NumActiveJoints);
             _virtualMechanism.SetJointValues(jvActiveAxes, false);
+            #endregion
+
+            #region Obtener tool y wobj para visualizacion
+            string tool = _mechUnit.Tool.Name.ToLower();
+            string wobj = _mechUnit.WorkObject.Name.ToLower();
+            #endregion
+
+            #region Scope de datos
+            // Conocer el scope de motion pointer para asignar tooles y wobj locales
+            var MotionScope = _sourceTask.MotionPointer;
+            string module;
+            if (MotionScope is null)
+            {
+                throw new Exception($"Motion pointer from {_sourceController.SystemName} is not available ");
+            }
+            else
+            {
+                module = MotionScope.Module.ToLower();
+            }
+            #endregion
+
+            #region Resolver tool (tooldata->rsTooldata) 
+
+            // Obtener rsTooldata
+            if (_targetToolActive != null)
+            {
+                _targetToolActive.Visible = false;
+                _targetToolActive.ShowName = false;
+            }
+            string localKey = $"{module}_{tool}";
+
+            // Primero se busca valor local, si no lo hay se busca global
+            if (!_targetTools.TryGetValue(localKey, out _targetToolActive) &&
+                !_targetTools.TryGetValue(tool, out _targetToolActive))
+            {
+                throw new Exception($"RsToolData '{tool}' not found");
+            }
+            _targetToolActive.Visible = true;
+            _targetToolActive.ShowName = true;
+            #endregion
+
+            #region Resolver wobjdata (wobjdata->rsWobjdata)
+
+            // Obtener RsWorkObject
+            if (_targetWobjActive != null)
+            {
+                _targetWobjActive.Visible = false;
+                _targetWobjActive.ShowName = false;
+            }
+            string localKeyWobj = $"{module}_{wobj}";
+
+            if (!_targetWobjs.TryGetValue(localKeyWobj, out _targetWobjActive) &&
+                !_targetWobjs.TryGetValue(wobj, out _targetWobjActive))
+            {
+                throw new Exception($"RsWorkObject '{wobj}' not found");
+            }
+            _targetWobjActive.Visible = true;
+            _targetWobjActive.ShowName = true;
+            #endregion
 
             sw.Stop();
 
@@ -344,7 +404,6 @@ namespace MotionLinker
         }
         public void SyncCartesian()
         {
-            string module;
             Stopwatch sw = Stopwatch.StartNew();
 
             #region Obtener variables de posicion
@@ -356,8 +415,10 @@ namespace MotionLinker
             //RsRobTarget posActual = ConvertToRsRobTarget("posAct", task.GetRobTarget(tool,wobj));
             #endregion
 
+            #region Scope de datos
             // Conocer el scope de motion pointer para asignar tooles y wobj locales
             var MotionScope = _sourceTask.MotionPointer;
+            string module;
             if (MotionScope is null)
             {
                 throw new Exception($"Motion pointer from {_sourceController.SystemName} is not available ");
@@ -366,6 +427,7 @@ namespace MotionLinker
             {
                 module = MotionScope.Module.ToLower();
             }
+            #endregion
 
             #region Resolver tool (tooldata->rsTooldata) 
 
