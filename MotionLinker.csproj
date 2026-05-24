@@ -97,6 +97,8 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="app.config" />
+    <None Include="docs\arquitectura.md" />
+    <None Include="docs\readme.md" />
     <None Include="MotionLinker.xml" />
     <None Include="MotionLinker.en.xml" />
     <None Include="MotionLinker.png" />
@@ -105,7 +107,9 @@
   </ItemGroup>
   <ItemGroup>
     <Content Include=".gitignore" />
+    <Content Include="docs\assets\MotionLinker.gif" />
   </ItemGroup>
+  <ItemGroup />
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
   <!-- To modify your build process, add your task inside one of the targets below and uncomment it. 
        Other similar extension points exist, see Microsoft.Common.targets.

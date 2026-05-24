@@ -103,15 +103,22 @@
 - Opcion sin datos locales. Sin datos locales se puede reducir la latencia de CartesianSync
 
 
-## [Unreleased] 16-05-2026
+## [Unreleased] 24-05-2026
 
 ### Added
 - Ocultacion de parametro "Unidades mecánicas exeternas" con CartesianSync a false
+- Maximo de reintentos IK para aviso
+- Documentacion externa
+- Documentacion interna
+- Cambio de *modo sincronizacion* en quente
+- Cambio de *modo wobj coordinados* en quente
 
 ### Changed
 - InverseKinematics Async
 
 ### Fixed
+- Campos privados de CodeBehind en StateCache
+- Optimizacion de refresco de graficos: Eliminado GraphicControl.UpdateAll. Se refresca con la propia simulacion.
 
 ### Notes
 - IK en pruebas
@@ -120,8 +127,6 @@
 ### TODO
 - Optimizar conexion e busqueda
 - Calidad de conexion
-- Optimizacion de refresco de graficos
-- Cambio de modo en quente
 - Permitir non pisar rswobj ou rstool, usar os que hai definidos anteriormente para probas de trayectoria
 - Marcar un rscontroller como "dummy"
 - Marcar un rscontroller como "usado"

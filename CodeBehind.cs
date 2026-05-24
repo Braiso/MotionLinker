@@ -6,17 +6,8 @@ using ABB.Robotics.Math;
 using ABB.Robotics.RobotStudio;
 using ABB.Robotics.RobotStudio.Stations;
 using ABB.Robotics.RobotStudio.Stations.Forms;
-using RobotStudio.API.Internal;
 using System;
-using System.Collections;
-using System.Collections.Generic;
 using System.Diagnostics;
-using System.Diagnostics.Eventing.Reader;
-using System.Dynamic;
-using System.Linq;
-using System.Runtime.Remoting.Messaging;
-using System.Text;
-using System.Threading.Tasks;
 using Task = System.Threading.Tasks.Task;
 
 namespace MotionLinker
@@ -34,17 +25,6 @@ namespace MotionLinker
     /// </remarks>
     public class CodeBehind : SmartComponentCodeBehind
     {
-
-        private bool _logging = false;
-        private Stopwatch _stepWatch = Stopwatch.StartNew();
-        private long _lastTick = 0;
-
-        // Secuencia de simulacion
-        // 1. Llama OnSimulationStep()
-        // 2. Actualiza Virtual Controller
-        // 3. Mueve robots/mecanismos
-        // 4. Llama OnSimulationStepEndAsync()
-
         // Resumen:
         //     Called when simulation is started.
         //
@@ -53,8 +33,15 @@ namespace MotionLinker
         //     Simulated component.
         public override void OnSimulationStart(SmartComponent component)
         {
-            if (_logging) Logger.AddMessage(new LogMessage("Simulation Start", "MotionLinker"));
+
+
             component.StateCache.Clear();
+            component.StateCache["_logging"] = false;
+            component.StateCache["_stepWatch"] = Stopwatch.StartNew();
+            component.StateCache["_lastTick"] = 0L;
+            bool _logging = (bool)component.StateCache["_logging"];
+
+            if (_logging) Logger.AddMessage(new LogMessage("Simulation Start", "MotionLinker"));
 
             #region Propiedades de entrada y validacion minima
             // Controlador Source
@@ -384,21 +371,25 @@ namespace MotionLinker
         /// </remarks>
         public override void OnSimulationStep(SmartComponent component, double simulationTime, double previousTime)
         {
+
+            Stopwatch _stepWatch = (Stopwatch)component.StateCache["_stepWatch"];
+            long _lastTick = (long)component.StateCache["_lastTick"];
+            bool _logging = (bool)component.StateCache["_logging"];
+
             long now = _stepWatch.ElapsedMilliseconds;
 
-            if (_lastTick != 0 && false)
-            {
                 long realDelta = now - _lastTick;
+                
+                if (_lastTick != 0 && _logging)
+                {
 
-                Logger.AddMessage(
-                    new LogMessage(
-                        $"Tiempo real entre steps: {realDelta} ms",
-                        "MotionLinker"));
-            }
+                    Logger.AddMessage(
+                        new LogMessage(
+                            $"Tiempo real entre steps: {realDelta} ms",
+                            "MotionLinker"));
+                }
 
-            _lastTick = now;
-
-            //GraphicControl.UpdateAll();
+            component.StateCache["_lastTick"] = now;
         }
         //
         // Resumen:
@@ -465,26 +456,48 @@ namespace MotionLinker
             }
             else if (changedProperty.Name == "Cartesian")
             {
-                bool cartesian =
-                    Convert.ToBoolean(changedProperty.Value);
 
-                // Si Cartesian está desactivado
+                bool cartesian =  Convert.ToBoolean(changedProperty.Value);
+
+                // Cambio de modo en caliente
+                if (component.StateCache.ContainsKey("MechanismData") &&
+                    component.StateCache["MechanismData"] is MechanismData mechData)
+                {
+                    SyncMode newMode = cartesian ? SyncMode.Cartesian : SyncMode.Joint;
+                    mechData.ActiveSync = newMode;
+                    mechData.DefaultSync = newMode;
+                }
+
+                // En modo joint no tiene sentido que esta opcion este habilidata
                 if (cartesian)
                 {
                     component.Properties["CoordinatedWObjs"].ReadOnly = false;
                 }
                 else
                 {
-                    component.Properties["CoordinatedWObjs"].Value = false;
                     component.Properties["CoordinatedWObjs"].ReadOnly = true;
                 }
 
                 component.RaisePropertyChanged(
                     component.Properties["CoordinatedWObjs"]);
             }
+            else if (changedProperty.Name == "CoordinatedWObjs")
+            {
 
+                bool coordinateWObj = Convert.ToBoolean(changedProperty.Value);
 
-            if (Simulator.State!=SimulationState.Stopped && Simulator.State != SimulationState.Ready) 
+                // Cambio de modo en caliente
+                if (component.StateCache.ContainsKey("MechanismData") &&
+                    component.StateCache["MechanismData"] is MechanismData mechData)
+                {
+
+                    mechData.CoordinatedWObjs = coordinateWObj;
+                    mechData.CoordinatedWObjs = coordinateWObj;
+                }
+            }
+
+            // Solo la propiedad Cartesian permite cambios en caliente
+            if ((changedProperty.Name != "Cartesian" && changedProperty.Name != "CoordinatedWObjs") && Simulator.State!=SimulationState.Stopped && Simulator.State != SimulationState.Ready) 
             {
                 Logger.AddMessage(new LogMessage("Restart simulation to apply changes", "MotionLinker", LogMessageSeverity.Warning));
             }

@@ -4,6 +4,7 @@ using ABB.Robotics.Controllers.RapidDomain;
 using ABB.Robotics.Math;
 using ABB.Robotics.RobotStudio;
 using ABB.Robotics.RobotStudio.Stations;
+using RobotStudio.API.Internal;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -15,34 +16,110 @@ namespace MotionLinker
 {
     public class MechanismData : IDisposable
     {
-        private Controller _sourceController; // IDisposable
-        private MechanicalUnit _mechUnit; // IDisposable
-        private ControllerTask _sourceTask; //IDisposable
-        private Dictionary<string, RapidData> _sourceTools; // RapidData IDisposable
-        private Dictionary<string, RapidData> _sourceWobjs; // RapidData IDisposable
+
+        #region Source controller resources
+
+        // Source controller and motion references
+        private Controller _sourceController;
+        private MechanicalUnit _mechUnit;
+        private ControllerTask _sourceTask;
+
+        // Cached RAPID data from source controller
+        private Dictionary<string, RapidData> _sourceTools;
+        private Dictionary<string, RapidData> _sourceWobjs;
+
+        #endregion
+
+        #region Target controller resources
+
+        // Virtual controller and mechanism references
         private RsIrc5Controller _targetController;
         private Mechanism _virtualMechanism;
         private RsTask _targetTask;
+
+        // RobotStudio converted data cache
         private Dictionary<string, RsToolData> _targetTools;
         private Dictionary<string, RsWorkObject> _targetWobjs;
+
+        // Currently active tool/workobject
         private RsToolData _targetToolActive;
         private RsWorkObject _targetWobjActive;
+
+        #endregion
+
+        #region Internal state
+
+        // Disposal guard
         private bool _disposedValue;
-        private int _maxLatency=50;
+
+        // Performance monitoring
+        private int _maxLatency = 50;
+
+        // Consecutive inverse kinematics failures
         private int _ikFailCount = 0;
         private const int MaxIkFails = 50;
-        // Marca de primer arranque evita "excepcion controller not response"
-        // Caso raro en pruebas con controladores offline
-        public bool FirstRunning { get; private set; } = false;
-        public bool TwinControllers { get; private set; }
-        public bool CoordinatedWObjs { get; private set; }
-        public SyncMode ActiveSync { get; private set; }
-        public SyncMode DefaultSync { get; private set; }
 
+        #endregion
+
+        #region Public properties
+        /// <summary>
+        /// Indicates whether the source controller has entered RUNNING state at least once.
+        /// Prevents offline controller response errors during startup.
+        /// </summary>
+        public bool FirstRunning { get; private set; } = false;
+
+        /// <summary>
+        /// Indicates whether source and target controllers share the same system name.
+        /// </summary>
+        public bool TwinControllers { get; private set; }
+
+        /// <summary>
+        /// Indicates whether coordinated WorkObjects with external mechanical units are enabled.
+        /// </summary>
+        public bool CoordinatedWObjs { get; set; }
+
+        /// <summary>
+        /// Current synchronization mode in use.
+        /// May change dynamically during execution.
+        /// </summary>
+        public SyncMode ActiveSync { get; set; }
+
+        /// <summary>
+        /// User-selected synchronization mode.
+        /// Used as the default mode when no fallback is required.
+        /// </summary>
+        public SyncMode DefaultSync { get; set; }
+        #endregion
+
+        /// <summary>
+        /// Initializes a new instance of the MechanismData class and prepares
+        /// the synchronization environment between source and target controllers.
+        /// </summary>
+        /// <param name="sourceController">
+        /// Source ABB controller used to retrieve motion and RAPID data.
+        /// </param>
+        /// <param name="targetController">
+        /// Target RobotStudio virtual controller used for synchronization.
+        /// </param>
+        /// <param name="twinControllers">
+        /// Indicates whether source and target controllers share the same system name.
+        /// </param>
+        /// <param name="coordinatedWObjs">
+        /// Enables support for coordinated WorkObjects with external mechanical units.
+        /// </param>
+        /// <param name="sync">
+        /// Initial synchronization mode.
+        /// </param>
+        /// <exception cref="ArgumentNullException">
+        /// Thrown when sourceController or targetController is null.
+        /// </exception>
+        /// <exception cref="InvalidOperationException">
+        /// Thrown when required resources such as T_ROB1 task cannot be found.
+        /// </exception>
         public MechanismData(
             Controller sourceController,
             RsIrc5Controller targetController,
-            bool twincontrollers,
+            bool twinControllers,
             bool coordinatedWObjs,
             SyncMode sync)
         {
@@ -52,15 +129,31 @@ namespace MotionLinker
             _targetController = targetController ?? throw new ArgumentNullException(nameof(targetController));
             _virtualMechanism = _targetController.MechanicalUnits[0].Mechanism;
             _targetTask = _targetController.Tasks["T_ROB1"] ?? throw new InvalidOperationException("rsTask T_ROB1 not found");
-            TwinControllers = twincontrollers;
+            TwinControllers = twinControllers;
             CoordinatedWObjs = coordinatedWObjs;
             ActiveSync = sync;
             DefaultSync = sync;
 
-            _sourceController.StateChanged += OnControllerStateChanged;
+            // Subscribe to controller events used during synchronization lifecycle
             _sourceController.OperatingModeChanged += OnOperatingModeChanged;
             _sourceController.Rapid.ExecutionStatusChanged += OnExecutionChanged;
         }
+        /// <summary>
+        /// Converts a RAPID ToolData object into a RobotStudio RsToolData instance.
+        /// </summary>
+        /// <param name="name">
+        /// Name assigned to the generated RobotStudio tool.
+        /// </param>
+        /// <param name="tool">
+        /// Source RAPID ToolData object.
+        /// </param>
+        /// <returns>
+        /// A RobotStudio tool representation containing transformed position
+        /// and orientation data.
+        /// </returns>
+        /// <exception cref="Exception">
+        /// Thrown if the source tool is empty or the conversion fails.
+        /// </exception>
         private RsToolData ConvertToRsTool(string name,ToolData tool)
         {
             if (tool.Equals(ToolData.Empty))
@@ -68,15 +161,15 @@ namespace MotionLinker
 
             try
             {
+                var rsToolData = new RsToolData();
+                rsToolData.Name = name;
+                const double scale = 1.0 / 1000.0;
 
-                var rstooldata = new RsToolData();
-                rstooldata.Name = name;
-                double scale = 1.0 / 1000.0;
+                // Tool attachment configuration
+                rsToolData.RobotHold = tool.Robhold;
 
-                // The robot is holding the tool.
-                rstooldata.RobotHold = tool.Robhold;
-
-                rstooldata.Frame.Matrix = new Matrix4(
+                // Convert RAPID frame to RobotStudio matrix
+                rsToolData.Frame.Matrix = new Matrix4(
                     new Vector3(
                         tool.Tframe.Trans.X * scale,
                         tool.Tframe.Trans.Y * scale,
@@ -88,41 +181,53 @@ namespace MotionLinker
                         tool.Tframe.Rot.Q4)
                 );
 
-                // Visual
-                rstooldata.ShowName = false; // Show the name of the tool data in the graphics.
-                rstooldata.FrameSize *= 2; // Set the frame size to twice its default size.
-                rstooldata.Visible = false; // Show the tool data in the graphics.
-                return rstooldata;
-                
+                // Visualization settings
+                rsToolData.ShowName = false;
+                rsToolData.FrameSize *= 2;
+                rsToolData.Visible = false;
+                return rsToolData;
             }
             catch (Exception ex)
             {
-                throw new Exception($"Error converting tool '{name}': {ex.Message}");
+                throw new Exception(
+                            $"Error converting tool '{name}'.",
+                            ex);
             }
         }
+        /// <summary>
+        /// Converts a RAPID WobjData object into a RobotStudio RsWorkObject instance.
+        /// </summary>
+        /// <param name="name">
+        /// Name assigned to the generated RobotStudio work object.
+        /// </param>
+        /// <param name="wobj">
+        /// Source RAPID WobjData object.
+        /// </param>
+        /// <returns>
+        /// A RobotStudio work object representation containing transformed
+        /// user frame and object frame data.
+        /// </returns>
+        /// <exception cref="Exception">
+        /// Thrown if the source work object is empty or the conversion fails.
+        /// </exception>
         private RsWorkObject ConvertToRsWobj(string name, WobjData wobj)
         {
 
             if (wobj.Equals(WobjData.Empty))
                 throw new Exception($"wobj '{name}' is empty.");
 
-
             try
             {
                 var rsWobj = new RsWorkObject();
                 rsWobj.Name = name;
-                double scale = 1.0 / 1000.0;
+                const double scale = 1.0 / 1000.0;
 
-                // Si el robot sostiene el objeto
+                // WorkObject configuration
                 rsWobj.RobotHold = wobj.Robhold;
-
-                // Si el user frame es fijo o se mueve
                 rsWobj.UserFrameProgrammed = wobj.Ufprog;
-
-                // Unidad mecanica asociada
                 rsWobj.UserFrameMechanicalUnit = wobj.Ufmec;
 
-                // uframe
+                // User frame transformation
                 rsWobj.UserFrame.Matrix = new Matrix4(
                     new Vector3(
                         wobj.Uframe.Trans.X * scale,
@@ -135,7 +240,7 @@ namespace MotionLinker
                         wobj.Uframe.Rot.Q4)
                 );
 
-                // oframe
+                // Object frame transformation
                 rsWobj.ObjectFrame.Matrix = new Matrix4(
                     new Vector3(
                         wobj.Oframe.Trans.X * scale,
@@ -148,7 +253,7 @@ namespace MotionLinker
                         wobj.Oframe.Rot.Q4)
                 );
 
-                // Visual
+                // Visualization settings
                 rsWobj.ShowName = false;
                 rsWobj.Visible = false;
                 rsWobj.FrameSize *= 2;
@@ -158,13 +263,31 @@ namespace MotionLinker
             }
             catch (Exception ex)
             {
-                throw new Exception($"Error converting wobj '{name}': {ex.Message}");
+                throw new Exception(
+                            $"Error converting wobj '{name}'.",
+                            ex);
             }
         }
-        private RsRobTarget ConvertToRsRobTarget(string name, RobTarget robtarget)
+        /// <summary>
+        /// Converts a RAPID RobTarget object into a RobotStudio RsRobTarget instance.
+        /// </summary>
+        /// <param name="name">
+        /// Name assigned to the generated RobotStudio target.
+        /// </param>
+        /// <param name="robTarget">
+        /// Source RAPID RobTarget object.
+        /// </param>
+        /// <returns>
+        /// A RobotStudio target representation containing transformed pose,
+        /// robot configuration and external axis values.
+        /// </returns>
+        /// <exception cref="Exception">
+        /// Thrown if the source target is empty or the conversion fails.
+        /// </exception>        
+        private RsRobTarget ConvertToRsRobTarget(string name, RobTarget robTarget)
         {
-            if (robtarget.Equals(RobTarget.Empty))
-                throw new Exception($"robtarget '{name}' is empty.");
+            if (robTarget.Equals(RobTarget.Empty))
+                throw new Exception($"RobTarget '{name}' is empty.");
 
             try
             {
@@ -173,43 +296,57 @@ namespace MotionLinker
 
                 double scale = 1.0 / 1000.0;
 
-                // Frame (posición + orientación)
+                // Frame transformation (position + orientation)
                 rsRobTarget.Frame.Matrix = new Matrix4(
                     new Vector3(
-                        robtarget.Trans.X * scale,
-                        robtarget.Trans.Y * scale,
-                        robtarget.Trans.Z * scale),
+                        robTarget.Trans.X * scale,
+                        robTarget.Trans.Y * scale,
+                        robTarget.Trans.Z * scale),
                     new Quaternion(
-                        robtarget.Rot.Q1,
-                        robtarget.Rot.Q2,
-                        robtarget.Rot.Q3,
-                        robtarget.Rot.Q4)
+                        robTarget.Rot.Q1,
+                        robTarget.Rot.Q2,
+                        robTarget.Rot.Q3,
+                        robTarget.Rot.Q4)
                 );
 
-                // Configuración ejes
-                rsRobTarget.SetConfiguration (robtarget.Robconf.Cf1,
-                                              robtarget.Robconf.Cf4,
-                                              robtarget.Robconf.Cf6,
-                                              robtarget.Robconf.Cfx);
+                // Robot configuration
+                rsRobTarget.SetConfiguration (robTarget.Robconf.Cf1,
+                                              robTarget.Robconf.Cf4,
+                                              robTarget.Robconf.Cf6,
+                                              robTarget.Robconf.Cfx);
                 rsRobTarget.ConfigurationStatus = ConfigurationStatus.Defined;
 
-                // Ejes externos
-                var extAxes = new ExternalAxisValues();
-                extAxes.Eax_a = robtarget.Extax.Eax_a;
-                extAxes.Eax_b = robtarget.Extax.Eax_b;
-                extAxes.Eax_c = robtarget.Extax.Eax_c;
-                extAxes.Eax_d = robtarget.Extax.Eax_d;
-                extAxes.Eax_e = robtarget.Extax.Eax_e;
-                extAxes.Eax_f = robtarget.Extax.Eax_f;
+                // External axes configuration
+                var extAxes = new ExternalAxisValues
+                {
+                    Eax_a = robTarget.Extax.Eax_a,
+                    Eax_b = robTarget.Extax.Eax_b,
+                    Eax_c = robTarget.Extax.Eax_c,
+                    Eax_d = robTarget.Extax.Eax_d,
+                    Eax_e = robTarget.Extax.Eax_e,
+                    Eax_f = robTarget.Extax.Eax_f
+                };
                 rsRobTarget.SetExternalAxes(extAxes,false);
 
                 return rsRobTarget;
             }
             catch (Exception ex)
             {
-                throw new Exception($"Error converting robtarget '{name}': {ex.Message}", ex);
+                throw new Exception(
+                    $"Error converting RobTarget '{name}'.",
+                    ex);
             }
         }
+        /// <summary>
+        /// Updates an existing RobotStudio tool using values
+        /// from a RAPID ToolData instance.
+        /// </summary>
+        /// <param name="key">
+        /// Cache key associated with the target tool.
+        /// </param>
+        /// <param name="rd">
+        /// RAPID data containing updated tool values.
+        /// </param>
         private void UpdateTool(string key, RapidData rd)
         {
             if (!_targetTools.TryGetValue(key, out var rstool))
@@ -222,7 +359,10 @@ namespace MotionLinker
 
             const double scale = 1.0 / 1000.0;
 
+            // Tool attachment configuration
             rstool.RobotHold = tool.Robhold;
+
+            // Update tool frame
             rstool.Frame.Matrix = new Matrix4(
                 new Vector3(
                     tool.Tframe.Trans.X * scale,
@@ -235,6 +375,16 @@ namespace MotionLinker
                     tool.Tframe.Rot.Q4)
             );
         }
+        /// <summary>
+        /// Updates an existing RobotStudio work object using values
+        /// from a RAPID WobjData instance.
+        /// </summary>
+        /// <param name="key">
+        /// Cache key associated with the target work object.
+        /// </param>
+        /// <param name="rd">
+        /// RAPID data containing updated work object values.
+        /// </param>
         private void UpdateWobj(string key, RapidData rd)
         {
             if (!_targetWobjs.TryGetValue(key, out var rsWobj))
@@ -247,8 +397,12 @@ namespace MotionLinker
 
             const double scale = 1.0 / 1000.0;
 
+            // WorkObject configuration
             rsWobj.RobotHold = wobj.Robhold;
+            rsWobj.UserFrameMechanicalUnit = wobj.Ufmec;
             rsWobj.UserFrameProgrammed = wobj.Ufprog;
+
+            // Update user frame
             rsWobj.UserFrame.Matrix = new Matrix4(
                 new Vector3(
                     wobj.Uframe.Trans.X * scale,
@@ -260,6 +414,8 @@ namespace MotionLinker
                     wobj.Uframe.Rot.Q3,
                     wobj.Uframe.Rot.Q4)
             );
+
+            // Update object frame
             rsWobj.ObjectFrame.Matrix = new Matrix4(
                 new Vector3(
                     wobj.Oframe.Trans.X * scale,
@@ -272,15 +428,18 @@ namespace MotionLinker
                     wobj.Oframe.Rot.Q4)
             );
         }
+        /// <summary>
+        /// Removes dynamically created tool and work object declarations
+        /// from the target RobotStudio task.
+        /// </summary>
+        /// <remarks>
+        /// Default objects such as tool0 and wobj0 are preserved.
+        /// </remarks>
         private void RemoveDataFromStation()
         {
-
-            // Tools
+            // Remove tools
             foreach (var tool in _targetTools.Values)
             {
-                if (tool.Name.Equals("tool0", StringComparison.OrdinalIgnoreCase))
-                    continue;
-
                 if (tool == null)
                 {
                     Logger.AddMessage(new LogMessage(
@@ -290,37 +449,61 @@ namespace MotionLinker
                     continue;
                 }
 
-                var existing = _targetTask.FindDataDeclarationFromModuleScope(tool.Name, tool.ModuleName);
+                // Preserve default tool
+                if (tool.Name.Equals("tool0", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                var existing = _targetTask.FindDataDeclarationFromModuleScope(
+                    tool.Name,
+                    tool.ModuleName);
+
                 if (existing != null)
                 {
                     _targetTask.DataDeclarations.Remove(existing);
                 }
             }
 
-            //wobjs
+            // Remove work objects
             foreach (var wobj in _targetWobjs.Values)
             {
-                if (wobj.Name.Equals("wobj0", StringComparison.OrdinalIgnoreCase))
-                    continue;
-
                 if (wobj == null)
                 {
                     Logger.AddMessage(new LogMessage(
-                        "Null wobj reference. Skipping.",
+                        "Null work object reference. Skipping.",
                         "MotionLinker",
                         LogMessageSeverity.Warning));
                     continue;
                 }
-                var existing = _targetTask.FindDataDeclarationFromModuleScope(wobj.Name, wobj.ModuleName);
+
+                // Preserve default work object
+                if (wobj.Name.Equals("wobj0", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                var existing = _targetTask.FindDataDeclarationFromModuleScope(
+                    wobj.Name,
+                    wobj.ModuleName);
+
                 if (existing != null)
                 {
                     _targetTask.DataDeclarations.Remove(existing);
                 }
             }
         }
-        private void ActualTool(string module,string tool)
+        /// <summary>
+        /// Resolves and activates the current RobotStudio tool for synchronization.
+        /// </summary>
+        /// <param name="module">
+        /// Module name used to resolve local tool declarations.
+        /// </param>
+        /// <param name="tool">
+        /// Tool name from the source controller.
+        /// </param>
+        /// <exception cref="Exception">
+        /// Thrown if the requested tool cannot be found.
+        /// </exception>
+        private void ResolveActiveTool(string module,string tool)
         {
-            // Obtener rsTooldata
+            // Hide previously active tool
             if (_targetToolActive != null)
             {
                 _targetToolActive.Visible = false;
@@ -328,78 +511,161 @@ namespace MotionLinker
             }
             string localKey = $"{module}_{tool}";
 
-            // Primero se busca valor local, si no lo hay se busca global
+            // Try local scope first, then global scope
             if (!_targetTools.TryGetValue(localKey, out _targetToolActive) &&
                 !_targetTools.TryGetValue(tool, out _targetToolActive))
             {
                 throw new Exception($"RsToolData '{tool}' not found");
             }
+
+            // Display current active tool
             _targetToolActive.Visible = true;
             _targetToolActive.ShowName = true;
         }
-        private void ActualWobj(string module, string wobj)
+        /// <summary>
+        /// Resolves and activates the current RobotStudio work object for synchronization.
+        /// </summary>
+        /// <param name="module">
+        /// Module name used to resolve local work object declarations.
+        /// </param>
+        /// <param name="workObjectName">
+        /// Work object name from the source controller.
+        /// </param>
+        /// <exception cref="Exception">
+        /// Thrown if the requested work object cannot be found.
+        /// </exception>
+        private void ResolveActiveWorkObject(string module, string workObjectName)
         {
-            // Obtener RsWorkObject
+            // Hide previously active work object
             if (_targetWobjActive != null)
             {
                 _targetWobjActive.Visible = false;
                 _targetWobjActive.ShowName = false;
             }
-            string localKeyWobj = $"{module}_{wobj}";
 
+            string localKeyWobj = $"{module}_{workObjectName}";
+
+            // Try local scope first, then global scope
             if (!_targetWobjs.TryGetValue(localKeyWobj, out _targetWobjActive) &&
-                !_targetWobjs.TryGetValue(wobj, out _targetWobjActive))
+                !_targetWobjs.TryGetValue(workObjectName, out _targetWobjActive))
             {
-                throw new Exception($"RsWorkObject '{wobj}' not found");
+                throw new Exception($"RsWorkObject '{workObjectName}' not found");
             }
+
+            // Display current active work object
             _targetWobjActive.Visible = true;
             _targetWobjActive.ShowName = true;
         }
+        /// <summary>
+        /// Adds RAPID symbols to the specified cache and subscribes
+        /// to value change notifications.
+        /// </summary>
+        /// <param name="cache">
+        /// Target cache used to store RAPID data objects.
+        /// </param>
+        /// <param name="symbols">
+        /// RAPID symbols to process.
+        /// </param>
+        /// <param name="rapidType">
+        /// Expected RAPID data type (e.g. "tooldata", "wobjdata").
+        /// </param>        
+        private void AddRapidDataToCache(Dictionary<string, RapidData> cache,RapidSymbol[] symbols,string rapidType)
+        {
+            foreach (var symbol in symbols)
+            {
+                var rapidData = new RapidData(
+                    _sourceController,
+                    symbol);
+
+                // Generate unique key for local/global symbols
+                string key =
+                    rapidData.IsLocal
+                        ? $"{symbol.Scope[1]}_{symbol.Name}".ToLower()
+                        : symbol.Name.ToLower();
+
+                // Avoid duplicate cache entries
+                if (!cache.ContainsKey(key))
+                {
+                    // Skip unrelated symbol types
+                    if (rapidData.RapidType == rapidType)
+                    {
+                        // Subscribe to updates and cache object
+                        rapidData.ValueChanged += OnValueChanged;
+                        cache.Add(key, rapidData);
+                    }
+                }
+                else
+                {
+                    Logger.AddMessage(new LogMessage(
+                        $"Duplicate {rapidType} detected with key '{key}' " +
+                        $"(Symbol: {symbol.Name})",
+                        "MotionLinker",
+                        LogMessageSeverity.Warning));
+                }
+            }
+        }
+        /// <summary>
+        /// Synchronizes the target mechanism using source controller joint values.
+        /// </summary>
+        /// <remarks>
+        /// Joint positions are retrieved from the source mechanical unit and
+        /// directly applied to the virtual mechanism. Active tool and work object
+        /// references are also resolved for visualization purposes.
+        /// </remarks>
+        /// <exception cref="Exception">
+        /// Thrown if the motion pointer is unavailable.
+        /// </exception>
         public void SyncJoint()
         {
             Stopwatch sw = Stopwatch.StartNew();
 
-            #region Obtener posicion por ejes y mover mecanismo target
-            double[] jv_rax = new double[6];
-            JointTarget jt = _mechUnit.GetPosition();
+            #region Get joint values and move target mechanism
 
-            // Robot axes
-            jv_rax[0] = Globals.DegToRad(jt.RobAx.Rax_1);
-            jv_rax[1] = Globals.DegToRad(jt.RobAx.Rax_2);
-            jv_rax[2] = Globals.DegToRad(jt.RobAx.Rax_3);
-            jv_rax[3] = Globals.DegToRad(jt.RobAx.Rax_4);
-            jv_rax[4] = Globals.DegToRad(jt.RobAx.Rax_5);
-            jv_rax[5] = Globals.DegToRad(jt.RobAx.Rax_6);
+            JointTarget jointTarget = _mechUnit.GetPosition();
 
-            double[] jvActiveAxes = new double[_virtualMechanism.NumActiveJoints];
-            Array.Copy(jv_rax, jvActiveAxes, _virtualMechanism.NumActiveJoints);
-            _virtualMechanism.SetJointValues(jvActiveAxes, false);
+            double[] robotAxes =
+            {
+                Globals.DegToRad(jointTarget.RobAx.Rax_1),
+                Globals.DegToRad(jointTarget.RobAx.Rax_2),
+                Globals.DegToRad(jointTarget.RobAx.Rax_3),
+                Globals.DegToRad(jointTarget.RobAx.Rax_4),
+                Globals.DegToRad(jointTarget.RobAx.Rax_5),
+                Globals.DegToRad(jointTarget.RobAx.Rax_6)
+            };
+
+
+            double[] activeJointValues = new double[_virtualMechanism.NumActiveJoints];
+            Array.Copy(
+                robotAxes,
+                activeJointValues,
+                _virtualMechanism.NumActiveJoints);
+
+            _virtualMechanism.SetJointValues(activeJointValues, false);
+
             #endregion
 
-            #region Obtener tool y wobj para visualizacion
-            string tool = _mechUnit.Tool.Name.ToLower();
-            string wobj = _mechUnit.WorkObject.Name.ToLower();
+            #region Get active tool and work object
+
+            string toolName = _mechUnit.Tool.Name.ToLower();
+            string wobjName = _mechUnit.WorkObject.Name.ToLower();
+
             #endregion
 
-            #region Scope de datos
-            // Conocer el scope de motion pointer para asignar tooles y wobj locales
-            var MotionScope = _sourceTask.MotionPointer;
-            string module;
-            if (MotionScope is null)
+            #region Resolve module scope
+
+            // Motion pointer scope is required for local tool/workobject resolution
+            var motionScope = _sourceTask.MotionPointer;
+            if (motionScope is null)
             {
                 throw new Exception($"Motion pointer from {_sourceController.SystemName} is not available ");
             }
-            else
-            {
-                module = MotionScope.Module.ToLower();
-            }
+
+            string module = motionScope.Module.ToLower();
+
+            ResolveActiveTool(module, toolName);
+            ResolveActiveWorkObject(module, wobjName);
+
             #endregion
-
-            //Resolver tool (tooldata -> rsTooldata) 
-            ActualTool(module, tool);
-
-            //Resolver tool (wobjdata -> rsWobjdata) 
-            ActualWobj(module, wobj);
 
             sw.Stop();
 
@@ -411,72 +677,104 @@ namespace MotionLinker
                     LogMessageSeverity.Warning));
             }
         }
-        public async Task SyncCartesianAsync(bool coordinateWobj)
+        /// <summary>
+        /// Synchronizes the target mechanism using Cartesian position data
+        /// from the source controller.
+        /// </summary>
+        /// <param name="useCoordinatedWorkObject">
+        /// Specifies whether coordinated WorkObjects with external mechanical
+        /// units should be considered during inverse kinematics calculation.
+        /// </param>
+        /// <remarks>
+        /// Retrieves the current robot target from the source controller,
+        /// resolves the active tool and work object, computes inverse kinematics,
+        /// and updates the target mechanism joint values.
+        /// </remarks>
+        /// <exception cref="Exception">
+        /// Thrown if the motion pointer is unavailable or inverse kinematics
+        /// repeatedly fail.
+        /// </exception>
+        public async Task SyncCartesianAsync(bool useCoordinatedWorkObject)
         {
 
-            Stopwatch sw = Stopwatch .StartNew();
+            Stopwatch sw = Stopwatch.StartNew();
 
-            #region Obtener variables de posicion
-            string tool = _mechUnit.Tool.Name.ToLower();
-            string wobj = _mechUnit.WorkObject.Name.ToLower();
+            #region Get active tool, work object and current position
 
-            RsRobTarget posActual = ConvertToRsRobTarget("posAct", _sourceTask.GetRobTarget());
+            string toolName = _mechUnit.Tool.Name.ToLower();
+            string workObjectName = _mechUnit.WorkObject.Name.ToLower();
+
+            RsRobTarget currentTarget = ConvertToRsRobTarget("posAct", _sourceTask.GetRobTarget());
+
             #endregion
 
-            #region Scope de datos
-            // Conocer el scope de motion pointer para asignar tooles y wobj locales
-            var MotionScope = _sourceTask.MotionPointer;
-            string module;
-            if (MotionScope is null)
+            #region Resolve module scope
+
+            // Resolve motion pointer scope for local tool and work object lookup
+            var motionScope = _sourceTask.MotionPointer;
+            if (motionScope is null)
             {
                 throw new Exception($"Motion pointer from {_sourceController.SystemName} is not available ");
             }
-            else
-            {
-                module = MotionScope.Module.ToLower();
-            }
+
+            string module = motionScope.Module.ToLower();
+
+            ResolveActiveTool(module, toolName);
+            ResolveActiveWorkObject(module, workObjectName);
+
             #endregion
 
-            //Resolver tool (tooldata -> rsTooldata) 
-            ActualTool(module, tool);
+            #region Calculate and transfer position (controller -> RobotStudio)
 
-            //Resolver tool (wobjdata -> rsWobjdata) 
-            ActualWobj(module, wobj);
-
-            #region Calcular y transmitir posicion (controller->rsController)
-
-            int[] conf = new int[]
+            int[] configuration =
             {
-                posActual.ConfigurationData.Cf1,
-                posActual.ConfigurationData.Cf4,
-                posActual.ConfigurationData.Cf6,
-                posActual.ConfigurationData.Cfx
+                currentTarget.ConfigurationData.Cf1,
+                currentTarget.ConfigurationData.Cf4,
+                currentTarget.ConfigurationData.Cf6,
+                currentTarget.ConfigurationData.Cfx
             };
 
-            //Comprobar consistencia de snapshot de posicion
-            if (tool != _mechUnit.Tool.Name.ToLower() || module != MotionScope.Module.ToLower() || wobj != _mechUnit.WorkObject.Name.ToLower())
+            // Ensure source state has not changed during data acquisition
+            bool stateChanged =
+                toolName != _mechUnit.Tool.Name.ToLower() ||
+                module != motionScope.Module.ToLower() ||
+                workObjectName != _mechUnit.WorkObject.Name.ToLower();
+
+            if (stateChanged)
             {
                 return;
             }
 
+            // Inverse kinematics calculation strategy:
+            // - Coordinated WorkObjects require the RobTarget-based calculation,
+            //   which supports external mechanical unit coordination.
+            // - Matrix-based calculation is faster but does not support
+            //   coordinated WorkObjects
 
-            double[] jv;
-            if (coordinateWobj)
+            double[] jointValues;
+            
+            if (useCoordinatedWorkObject)
             {
-                // IK CalculateInverseKinematicsAsync(posActual, _targetWobjActive, _targetToolActive, conf);
-                jv = await _virtualMechanism.CalculateInverseKinematicsAsync(posActual, _targetWobjActive, _targetToolActive, conf);
-            }
+                jointValues =
+                    await _virtualMechanism.CalculateInverseKinematicsAsync(
+                        currentTarget,
+                        _targetWobjActive,
+                        _targetToolActive,
+                        configuration);
+                            }
             else
             {
-                // IK CalculateInverseKinematics(_targetWobjActive.UserFrame.Matrix.Multiply(posActual.Frame.Matrix)
-                jv = await _virtualMechanism.CalculateInverseKinematicsAsync(_targetWobjActive.UserFrame.Matrix.Multiply(posActual.Frame.Matrix),
-                                                                _targetToolActive.Frame.Matrix,
-                                                                false);
+                jointValues =
+                    await _virtualMechanism.CalculateInverseKinematicsAsync(
+                        _targetWobjActive.UserFrame.Matrix.Multiply(
+                            currentTarget.Frame.Matrix),
+                        _targetToolActive.Frame.Matrix,
+                        false);
             }
 
-            if (jv is null)
+            if (jointValues is null)
             {
-                // Tolerancia estados transitorios en el arranque
+                // Allow transient failures during startup
                 _ikFailCount++;
 
                 if (_ikFailCount >= MaxIkFails)
@@ -485,19 +783,30 @@ namespace MotionLinker
                         $"Inverse Kinematics failed after {_ikFailCount} attempts." +
                         $"\nTool: {_targetToolActive.Name}" +
                         $"\nWobj: {_targetWobjActive.Name}" +
-                        $"\nPos: [[{Math.Round(posActual.Frame.X*1000,2)},{Math.Round(posActual.Frame.Y * 1000,2)},{Math.Round(posActual.Frame.Z * 1000, 2)}]," +
-                        $"[{Math.Round(posActual.Frame.Matrix.Quaternion.q1,5)},{Math.Round(posActual.Frame.Matrix.Quaternion.q2, 5)}," +
-                        $"{Math.Round(posActual.Frame.Matrix.Quaternion.q3, 5)},{Math.Round(posActual.Frame.Matrix.Quaternion.q4, 5)}]");
+                        $"\nPos: [[{Math.Round(currentTarget.Frame.X * 1000, 2)}," +
+                        $"{Math.Round(currentTarget.Frame.Y * 1000, 2)}," +
+                        $"{Math.Round(currentTarget.Frame.Z * 1000, 2)}]," +
+                        $"[{Math.Round(currentTarget.Frame.Matrix.Quaternion.q1, 5)}," +
+                        $"{Math.Round(currentTarget.Frame.Matrix.Quaternion.q2, 5)}," +
+                        $"{Math.Round(currentTarget.Frame.Matrix.Quaternion.q3, 5)}," +
+                        $"{Math.Round(currentTarget.Frame.Matrix.Quaternion.q4, 5)}]]"
+                        );
                 }
-            }
-            else
-            {
-                double[] jvActiveAxes = new double[_virtualMechanism.NumActiveJoints];
-                Array.Copy(jv, jvActiveAxes, _virtualMechanism.NumActiveJoints);
 
-                _virtualMechanism.SetJointValues(jvActiveAxes, false);
+                return;
             }
             _ikFailCount = 0;
+
+            double[] activeJointValues = new double[_virtualMechanism.NumActiveJoints];
+            Array.Copy(
+                        jointValues,
+                        activeJointValues,
+                        _virtualMechanism.NumActiveJoints);
+
+            _virtualMechanism.SetJointValues(
+                activeJointValues,
+                false);
+
             #endregion
 
             sw.Stop();
@@ -510,97 +819,53 @@ namespace MotionLinker
                     LogMessageSeverity.Warning));
             }
         }
+        /// <summary>
+        /// Initializes local caches of RAPID tool and work object data
+        /// from the source controller.
+        /// </summary>
+        /// <remarks>
+        /// Searches all source task modules for persistent tooldata and
+        /// wobjdata symbols, subscribes to value change events and builds
+        /// local caches used during synchronization.
+        /// </remarks>
+        /// <exception cref="Exception">
+        /// Thrown if required RAPID data cannot be found.
+        /// </exception>
         public void InitRapidDataCache()
         {
             var tools = new Dictionary<string, RapidData>();
             var wobjs = new Dictionary<string, RapidData>();
 
-            RapidSymbol[] tooldatas;
-            RapidSymbol[] wobjdatas;
-
             RapidSymbolSearchProperties sProp = RapidSymbolSearchProperties.CreateDefaultForData();
             sProp.Types = SymbolTypes.Persistent;
 
-            // Se exporta cada modulo por separado
+            // Search each module independently
             foreach (Module module in _sourceTask.GetModules())
             {
-                tooldatas = module.SearchRapidSymbol(sProp,"tooldata",System.String.Empty);
-                wobjdatas = module.SearchRapidSymbol(sProp,"wobjdata",System.String.Empty);
+                RapidSymbol[] toolData =
+                    module.SearchRapidSymbol(
+                        sProp,
+                        "tooldata",
+                        string.Empty);
 
-                // tooldata
-                if (tooldatas.Length > 0)
-                {
-                    foreach (var sym in tooldatas)
-                    {
+                RapidSymbol[] workObjData =
+                    module.SearchRapidSymbol(
+                        sProp,
+                        "wobjdata",
+                        string.Empty);
 
-                        var rd = new RapidData(_sourceController, sym);
-                        string key;
+                AddRapidDataToCache(
+                    tools,
+                    toolData,
+                    "tooldata");
 
-                        if (rd.IsLocal)
-                        {
-                            key = $"{sym.Scope[1]}_{sym.Name}".ToLower();
-                        }
-                        else
-                        {
-                            key = sym.Name.ToLower();
-                        }
-
-                        if (!tools.ContainsKey(key))
-                        {
-                            if (rd.RapidType == "tooldata")
-                            {
-                                rd.ValueChanged += OnValueChanged;
-                                tools.Add(key, rd);
-                            }
-                        }
-                        else
-                        {
-                            Logger.AddMessage(new LogMessage(
-                                $"Duplicate tooldata detected with key '{key}' (Symbol: {sym.Name})",
-                                "MotionLinker",
-                                LogMessageSeverity.Warning));
-                        }
-                    }
-                }
-
-                // wobjdata
-                if (wobjdatas.Length > 0)
-                {
-                    foreach (var sym in wobjdatas)
-                    {
-
-                        var rd = new RapidData(_sourceController, sym);
-                        string key;
-
-                        if (rd.IsLocal)
-                        {
-                            key = $"{sym.Scope[1]}_{sym.Name}".ToLower();
-                        }
-                        else
-                        {
-                            key = sym.Name.ToLower();
-                        }
-
-                        if (!wobjs.ContainsKey(key))
-                        {
-                            if (rd.RapidType == "wobjdata")
-                            {
-                                rd.ValueChanged += OnValueChanged;
-                                wobjs.Add(key, rd);
-                            }
-                        }
-                        else
-                        {
-                            Logger.AddMessage(new LogMessage(
-                                $"Duplicate wobjdata detected with key '{key}' (Symbol: {sym.Name})",
-                                "MotionLinker",
-                                LogMessageSeverity.Warning));
-                        }
-                    }
-                }
+                AddRapidDataToCache(
+                    wobjs,
+                    workObjData,
+                    "wobjdata");
             }
 
-            // Validacion y asignacion
+            // Validate and assign caches
             if (tools.Count == 0)
                 throw new Exception("No tooldata found in source controller.");
 
@@ -610,40 +875,67 @@ namespace MotionLinker
             _sourceTools = tools;
             _sourceWobjs = wobjs;
         }
+        /// <summary>
+        /// Initializes RobotStudio tool and work object caches from
+        /// the source RAPID data cache.
+        /// </summary>
+        /// <remarks>
+        /// Converts cached RAPID ToolData and WobjData instances into
+        /// RobotStudio equivalents used during synchronization.
+        /// </remarks>
+        /// <exception cref="Exception">
+        /// Thrown if RAPID data conversion fails.
+        /// </exception>
         public void InitRsDataCache()
         {
             try
             {
                 _targetTools = _sourceTools.ToDictionary(
-                    kvp => kvp.Key,
-                    kvp => ConvertToRsTool(kvp.Key, (ToolData)kvp.Value.Value)
-                );
+                    entry => entry.Key,
+                    entry => ConvertToRsTool(
+                        entry.Key,
+                        (ToolData)entry.Value.Value));
 
                 _targetWobjs = _sourceWobjs.ToDictionary(
-                    kvp => kvp.Key,
-                    kvp => ConvertToRsWobj(kvp.Key, (WobjData)kvp.Value.Value)
-                );
+                    entry => entry.Key,
+                    entry => ConvertToRsWobj(
+                        entry.Key,
+                        (WobjData)entry.Value.Value));
             }
             catch (Exception ex)
             {
-                throw new Exception($"Error converting RAPID data: {ex.Message}", ex);
+                throw new Exception(
+                    "Failed to initialize RobotStudio data cache.",
+                    ex);
             }
         }
+        /// <summary>
+        /// Adds cached RobotStudio tool and work object data to the target task.
+        /// </summary>
+        /// <remarks>
+        /// Existing declarations with the same name are replaced.
+        /// Default objects (tool0 and wobj0) are preserved.
+        /// </remarks>
         public void AddDataToStation()
         {
 
-            // Tools
+            // Add tools
             foreach (var tool in _targetTools.Values)
             {
-                if (tool.Name.Equals("tool0", StringComparison.OrdinalIgnoreCase))
-                    continue;
-
                 if (tool == null)
                 {
                     Logger.AddMessage(new LogMessage(
                         "Null tool reference. Skipping.",
                         "MotionLinker",
                         LogMessageSeverity.Warning));
+                    continue;
+                }
+
+                // Preserve default tool
+                if (tool.Name.Equals(
+                    "tool0",
+                    StringComparison.OrdinalIgnoreCase))
+                {
                     continue;
                 }
 
@@ -655,12 +947,9 @@ namespace MotionLinker
                 _targetTask.DataDeclarations.Add(tool);
             }
 
-            //wobjs
+            // Add work objects
             foreach (var wobj in _targetWobjs.Values)
             {
-                if (wobj.Name.Equals("wobj0", StringComparison.OrdinalIgnoreCase))
-                    continue;
-
                 if (wobj == null)
                 {
                     Logger.AddMessage(new LogMessage(
@@ -669,6 +958,15 @@ namespace MotionLinker
                         LogMessageSeverity.Warning));
                     continue;
                 }
+
+                // Preserve default work object
+                if (wobj.Name.Equals(
+                    "wobj0",
+                    StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
                 var existing = _targetTask.FindDataDeclarationFromModuleScope(wobj.Name, wobj.ModuleName);
                 if (existing != null)
                 {
@@ -677,15 +975,24 @@ namespace MotionLinker
                 _targetTask.DataDeclarations.Add(wobj);
             }
         }
-        private void OnControllerStateChanged(object sender, StateChangedEventArgs e)
-        {
-            // Futura uso
-            //Logger.AddMessage(new LogMessage($"State: {e.NewState}", "MotionLinker"));
-        }
+        /// <summary>
+        /// Handles controller operating mode changes and adjusts the
+        /// synchronization strategy when required.
+        /// </summary>
+        /// <remarks>
+        /// Cartesian synchronization is automatically replaced by Joint
+        /// synchronization in manual modes because inverse kinematics
+        /// may become unreliable. The default synchronization mode is
+        /// restored when returning to Auto mode.
+        /// </remarks>
         private void OnOperatingModeChanged(object sender, OperatingModeChangeEventArgs e)
         {
-            if ((e.NewMode == ControllerOperatingMode.ManualReducedSpeed || e.NewMode == ControllerOperatingMode.ManualFullSpeed) &&
-                DefaultSync == SyncMode.Cartesian)
+
+            bool manualMode =
+                e.NewMode == ControllerOperatingMode.ManualReducedSpeed ||
+                e.NewMode == ControllerOperatingMode.ManualFullSpeed;
+
+            if (manualMode && DefaultSync == SyncMode.Cartesian)
             {
                 // Cartesian sync is not reliable in manual modes
                 ActiveSync = SyncMode.Joint;
@@ -694,52 +1001,63 @@ namespace MotionLinker
                     $"Switching to Joint sync: Cartesian sync is not reliable in {e.NewMode} mode.",
                     "MotionLinker",
                     LogMessageSeverity.Warning));
+                return;
             }
             else if (ActiveSync!= DefaultSync && e.NewMode == ControllerOperatingMode.Auto)
                 {
                     ActiveSync = DefaultSync;
 
                     Logger.AddMessage(new LogMessage(
-                        $"Cartesian sync restored.",
+                        $"Restoring {DefaultSync} synchronization.",
                         "MotionLinker",
                         LogMessageSeverity.Warning));
             }
         }
+        /// <summary>
+        /// Handles RAPID execution status changes.
+        /// </summary>
+        /// <remarks>
+        /// Marks the controller as initialized once the RAPID task
+        /// enters RUNNING state for the first time.
+        /// </remarks>
         private void OnExecutionChanged(object sender, ExecutionStatusChangedEventArgs e)
         {
             if (e.Status == ExecutionStatus.Running)
             {
-                Rapid rapid = null;
-                rapid = sender as Rapid;
                 FirstRunning = true;
             }
         }
+        /// <summary>
+        /// Handles RAPID data value changes and updates cached
+        /// RobotStudio objects accordingly.
+        /// </summary>
+        /// <remarks>
+        /// Converts RAPID symbol scope into cache keys and propagates
+        /// runtime updates for tool and work object data.
+        /// </remarks>
         private void OnValueChanged(object sender, DataValueChangedEventArgs e)
         {
-            if (!(sender is RapidData rd))
+            if (!(sender is RapidData rapidData))
                 return;
 
             try
             {
-                string key;
-                RapidSymbol sym = rd.Symbol;
-                if (rd.IsLocal)
-                {
-                    key = $"{sym.Scope[1]}_{sym.Name}".ToLower();
-                }
-                else
-                {
-                    key = sym.Name.ToLower();
-                }
+                RapidSymbol symbol = rapidData.Symbol;
 
-                switch (rd.RapidType)
+                // Generate unique key for local/global symbols
+                string key =
+                    rapidData.IsLocal
+                        ? $"{symbol.Scope[1]}_{symbol.Name}".ToLower()
+                        : symbol.Name.ToLower();
+
+                switch (rapidData.RapidType)
                 {
                     case "tooldata":
-                        UpdateTool(key, rd);
+                        UpdateTool(key, rapidData);
                         break;
 
                     case "wobjdata":
-                        UpdateWobj(key, rd);
+                        UpdateWobj(key, rapidData);
                         break;
                 }
             }
@@ -750,21 +1068,27 @@ namespace MotionLinker
                     "MotionLinker",
                     LogMessageSeverity.Warning));
             }
-
         }
+        /// <summary>
+        /// Releases resources used by the synchronization engine.
+        /// </summary>
+        /// <remarks>
+        /// Unsubscribes controller events, removes dynamically created
+        /// RobotStudio data, disposes RAPID resources and clears local caches.
+        /// </remarks>
         public void Dispose()
         {
             if (_disposedValue)
                 return;
 
-            // Eliminar datos de tool y wobj usados
+            // Remove dynamically created station data
             RemoveDataFromStation();
 
-            // Tarea de movimiento source controller
+            // Dispose source task
             SafeDispose(() => _sourceTask.Dispose(), "Task.Dispose");
             _sourceTask= null;
 
-            // _sourceTools: RapidData
+            // Dispose RAPID tool cache
             if (_sourceTools != null)
             {
                 foreach (var item in _sourceTools.Values)
@@ -777,7 +1101,7 @@ namespace MotionLinker
                 _sourceTools = null;
             }
 
-            // _sourceWobjs: RapidData
+            // Dispose RAPID work object cache
             if (_sourceWobjs != null)
             {
                 foreach (var item in _sourceWobjs.Values)
@@ -790,7 +1114,7 @@ namespace MotionLinker
                 _sourceWobjs = null;
             }
 
-            // _mechUnit: MechanicalUnit
+            // Dispose mechanical unit
             if (_mechUnit != null)
             {
                 SafeDispose(
@@ -799,13 +1123,9 @@ namespace MotionLinker
                 _mechUnit = null;
             }
 
-            // _sourceController: Controller
+            // Unsubscribe controller events and dispose controller
             if (_sourceController != null)
             {
-                SafeDispose(
-                    () => _sourceController.StateChanged -= OnControllerStateChanged,
-                    "Controller.StateChanged");
-
                 SafeDispose(
                     () => _sourceController.OperatingModeChanged -= OnOperatingModeChanged,
                     "Controller.OperatingModeChanged");
@@ -822,6 +1142,16 @@ namespace MotionLinker
 
             _disposedValue = true;
         }
+        /// <summary>
+        /// Executes a cleanup operation and logs any exception
+        /// without interrupting the disposal process.
+        /// </summary>
+        /// <param name="action">
+        /// Cleanup action to execute.
+        /// </param>
+        /// <param name="name">
+        /// Descriptive name of the resource being released.
+        /// </param>
         private void SafeDispose(Action action, string name)
         {
             try
