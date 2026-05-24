@@ -97,7 +97,7 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="app.config" />
-    <None Include="docs\arquitectura.md" />
+    <None Include="docs\arquitecture.md" />
     <None Include="docs\readme.md" />
     <None Include="MotionLinker.xml" />
     <None Include="MotionLinker.en.xml" />

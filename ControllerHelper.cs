@@ -6,11 +6,28 @@ using System.Collections.Generic;
 
 namespace MotionLinker
 {
+    /// <summary>
+    /// Provides helper methods for ABB controller discovery
+    /// and connection management.
+    /// </summary>
+    /// <remarks>
+    /// Handles controller lookup, connection creation and
+    /// controller name retrieval for Smart Component runtime use.
+    /// </remarks>
     public static class ControllerHelper
     {
-        public static Controller ConnectController(ControllerInfo ctrlInfo)
+        /// <summary>
+        /// Creates a connection to the specified controller.
+        /// </summary>
+        /// <param name="controllerInfo">
+        /// Controller information used for connection.
+        /// </param>
+        /// <returns>
+        /// Connected controller instance, or null if the connection fails.
+        /// </returns>
+        public static Controller ConnectController(ControllerInfo controllerInfo)
         {
-            if (ctrlInfo == null)
+            if (controllerInfo == null)
             {
                 Logger.AddMessage(new LogMessage(
                     "ControllerInfo is null",
@@ -22,10 +39,10 @@ namespace MotionLinker
 
             try
             {
-                Controller controller = Controller.Connect(ctrlInfo, ConnectionType.Standalone);
+                Controller controller = Controller.Connect(controllerInfo, ConnectionType.Standalone);
 
                 Logger.AddMessage(new LogMessage(
-                    $"Connected to {ctrlInfo.SystemName}",
+                    $"Connected to {controllerInfo.SystemName}",
                     "MotionLinker",
                     LogMessageSeverity.Information));
 
@@ -34,7 +51,7 @@ namespace MotionLinker
             catch (Exception ex)
             {
                 Logger.AddMessage(new LogMessage(
-                    $"Connection failed: {ctrlInfo.SystemName} ({ctrlInfo.SystemId})",
+                    $"Connection failed: {controllerInfo.SystemName} ({controllerInfo.SystemId})",
                     "MotionLinker",
                     ex.Message,
                     LogMessageSeverity.Error));
@@ -42,23 +59,36 @@ namespace MotionLinker
                 return null;
             }
         }
+        /// <summary>
+        /// Searches available controllers and returns their system names.
+        /// </summary>
+        /// <param name="criteria">
+        /// Optional controller search criteria.
+        /// </param>
+        /// <param name="logging">
+        /// Enables diagnostic logging of discovered controllers.
+        /// </param>
+        /// <returns>
+        /// Semicolon-separated controller names.
+        /// </returns>
         public static string SearchSystemNames(NetworkScannerSearchCriterias criteria = NetworkScannerSearchCriterias.None, bool logging = false)
         {
-            if (logging) Logger.AddMessage(new LogMessage("Inicio busqueda controladores", "MotionLinker"));
-            
-            NetworkScanner scanner = new NetworkScanner();
-            ControllerInfo[] controllers = null;
-
-            if (criteria==NetworkScannerSearchCriterias.None)
+            // Start controller discovery
+            if (logging)
             {
-                controllers = scanner.GetControllers();
-            }
-            else
-            {
-                controllers = scanner.GetControllers(criteria);
+                Logger.AddMessage(
+                    new LogMessage(
+                        "Starting controller discovery",
+                        "MotionLinker"));
             }
 
-            
+            var scanner = new NetworkScanner();
+
+            ControllerInfo[] controllers =
+                criteria == NetworkScannerSearchCriterias.None
+                    ? scanner.GetControllers()
+                    : scanner.GetControllers(criteria);
+
             if (controllers == null || controllers.Length == 0)
             {
                 Logger.AddMessage(
@@ -70,17 +100,19 @@ namespace MotionLinker
                 return string.Empty;
             }
 
-            List<string> names = new List<string>();
+            var names = new List<string>();
 
-            foreach (ControllerInfo ctrl in controllers)
+            foreach (ControllerInfo controller in controllers)
             {
-                names.Add(ctrl.SystemName);
+                names.Add(controller.SystemName);
 
                 if (logging)
                 {
                     Logger.AddMessage(
                         new LogMessage(
-                            $"Controlador {ctrl.Name}, ID {ctrl.SystemId} en IP {ctrl.IPAddress}",
+                            $"Controller {controller.Name}, " +
+                            $"ID {controller.SystemId}, " +
+                            $"IP {controller.IPAddress}",
                             "MotionLinker"));
                 }
             }

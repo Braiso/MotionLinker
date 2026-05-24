@@ -13,229 +13,297 @@ using Task = System.Threading.Tasks.Task;
 namespace MotionLinker
 {
     /// <summary>
-    /// Code-behind class for the MotionLinker Smart Component.
+    /// Code-behind implementation for the MotionLinker Smart Component.
     /// </summary>
     /// <remarks>
-    /// The code-behind class should be seen as a service provider used by the 
-    /// Smart Component runtime. Only one instance of the code-behind class
-    /// is created, regardless of how many instances there are of the associated
-    /// Smart Component.
-    /// Therefore, the code-behind class should not store any state information.
-    /// Instead, use the SmartComponent.StateCache collection.
+    /// Handles Smart Component lifecycle events and coordinates
+    /// synchronization between source and target controllers.
     /// </remarks>
     public class CodeBehind : SmartComponentCodeBehind
     {
-        // Resumen:
-        //     Called when simulation is started.
-        //
-        // Parámetros:
-        //   component:
-        //     Simulated component.
+        /// <summary>
+        /// Initializes MotionLinker when simulation starts.
+        /// </summary>
+        /// <param name="component">
+        /// Smart Component instance associated with the simulation.
+        /// </param>
+        /// <remarks>
+        /// Reads component properties, discovers source and target
+        /// controllers, initializes synchronization resources and
+        /// stores runtime data in the component state cache.
+        /// </remarks>
         public override void OnSimulationStart(SmartComponent component)
         {
 
-
+            // Initialize runtime state cache
             component.StateCache.Clear();
             component.StateCache["_logging"] = false;
             component.StateCache["_stepWatch"] = Stopwatch.StartNew();
             component.StateCache["_lastTick"] = 0L;
+
             bool _logging = (bool)component.StateCache["_logging"];
 
             if (_logging) Logger.AddMessage(new LogMessage("Simulation Start", "MotionLinker"));
 
-            #region Propiedades de entrada y validacion minima
-            // Controlador Source
-            string ctrlSource = component.Properties["SourceController"]?.Value as string;
+            #region Read input properties and validate
 
-            // Controlador Target
-            string ctrlTarget = component.Properties["TargetController"]?.Value as string;
+            /// Source controller name
+            string sourceControllerName = component.Properties["SourceController"]?.Value as string;
 
-            // Tipo de sincronizacion
-            bool cartesian = false;
+            // Target controller name
+            string targetControllerName = component.Properties["TargetController"]?.Value as string;
+
+            // Synchronization mode settings
+            bool cartesian;
+            bool coordinatedWObjs;
+
             try
             {
-                cartesian = Convert.ToBoolean(component.Properties["Cartesian"].Value);
-            }
-            catch (Exception ex) 
-            {
-                Logger.AddMessage(new LogMessage("Error reading Cartesian mode property", ex.Message,"MotionLinker", LogMessageSeverity.Error));
-                return;
-            }
+                cartesian =
+                    Convert.ToBoolean(
+                        component.Properties["Cartesian"].Value);
 
-            // Tipo de sincronizacion
-            bool coordinatedWObjs = false;
-            try
-            {
-                coordinatedWObjs = Convert.ToBoolean(component.Properties["CoordinatedWObjs"].Value);
+                coordinatedWObjs =
+                    Convert.ToBoolean(
+                        component.Properties["CoordinatedWObjs"].Value);
             }
             catch (Exception ex)
             {
-                Logger.AddMessage(new LogMessage("Error reading CoordinatedWObjs property", ex.Message, "MotionLinker", LogMessageSeverity.Error));
+                Logger.AddMessage(new LogMessage(
+                    "Error reading component properties",
+                    ex.Message,
+                    "MotionLinker",
+                    LogMessageSeverity.Error));
+
                 return;
             }
 
-            // Validacion propiedades
-            if (string.IsNullOrWhiteSpace(ctrlSource))
+            // Validate required properties
+            if (string.IsNullOrWhiteSpace(sourceControllerName))
             {
-                Logger.AddMessage(new LogMessage("Source controller name cannot be empty", "MotionLinker", LogMessageSeverity.Error));
+                Logger.AddMessage(new LogMessage(
+                    "Source controller name cannot be empty",
+                    "MotionLinker",
+                    LogMessageSeverity.Error));
+
                 return;
             }
 
-            if (string.IsNullOrWhiteSpace(ctrlTarget))
+            if (string.IsNullOrWhiteSpace(targetControllerName))
             {
-                Logger.AddMessage(new LogMessage("Target controller name cannot be empty", "MotionLinker", LogMessageSeverity.Error));
-                return;
+                Logger.AddMessage(new LogMessage(
+                    "Target controller name cannot be empty",
+                    "MotionLinker",
+                    LogMessageSeverity.Error));
 
+                return;
             }
+
             #endregion
 
-            #region Comprobacion de identidad
-            bool twinControllers;
-            if (ctrlSource==ctrlTarget)
-            {
-                // En caso de ser tener el  mismo nombre se supone que se conecta el real con su homonimo virtual
-                twinControllers = true;
-                Logger.AddMessage(new LogMessage($"Same name controllers. Source must be online",
-                    LogMessageSeverity.Warning));
-            }
-            else
-            {
-                twinControllers = false;
-                Logger.AddMessage(new LogMessage($"Different name controllers. Source could be online or offline",
-                    LogMessageSeverity.Warning));
-            }
-            #endregion
+            #region Twin controller detection
 
-            #region  Busqueda de controladores reales (online y offline)
-            if (_logging) Logger.AddMessage(new LogMessage("Inicio busqueda controladores", "MotionLinker"));
-            NetworkScanner scanner = new NetworkScanner();
+            // Controllers with identical names are assumed to represent
+            // a real controller and its virtual counterpart.
+            bool twinControllers = sourceControllerName == targetControllerName;
 
-            ControllerInfo[] controllers = null;
             if (twinControllers)
             {
-                // Mismo nombre el source deberia ser real
-                controllers = scanner.GetControllers(NetworkScannerSearchCriterias.Real);
+                Logger.AddMessage(new LogMessage(
+                    "Same controller name detected. Source controller must be online.",
+                    "MotionLinker",
+                    LogMessageSeverity.Warning));
             }
             else
             {
-                controllers = scanner.GetControllers();
+                Logger.AddMessage(new LogMessage(
+                    "Different controller names detected. Source controller may be online or offline.",
+                    "MotionLinker",
+                    LogMessageSeverity.Warning));
             }
 
-            if (controllers.Length > 0) 
-            { 
-                foreach (ControllerInfo ctrl in controllers ) 
-                {  
-                    if (_logging) Logger.AddMessage(new LogMessage($"Controlador {ctrl.Name}, ID {ctrl.SystemId} en IP {ctrl.IPAddress}", "MotionLinker"));
-                }            
-            }
-            else
-            {
-                Logger.AddMessage(new LogMessage("Controllers not found", "MotionLinker", LogMessageSeverity.Error));
-                return;
-            }
             #endregion
 
-            #region Busqueda de controladores virtuales (RobotStudio)
-            if (_logging) Logger.AddMessage(new LogMessage("Inicio busqueda controladores RobotStudio", "MotionLinker"));
+            #region Search for candidate source controllers
+
+            if (_logging)
+            {
+                Logger.AddMessage(new LogMessage(
+                    "Starting controller discovery",
+                    "MotionLinker"));
+            }
+
+            var scanner = new NetworkScanner();
+
+            // Twin controllers are assumed to be a real controller
+            // paired with its virtual counterpart.
+            ControllerInfo[] controllers =
+                twinControllers
+                    ? scanner.GetControllers(NetworkScannerSearchCriterias.Real)
+                    : scanner.GetControllers();
+
+            if (controllers == null || controllers.Length == 0)
+            {
+                Logger.AddMessage(new LogMessage(
+                    "No controllers found.",
+                    "MotionLinker",
+                    LogMessageSeverity.Error));
+
+                return;
+            }
+
+            // Log discovered controllers
+            if (_logging)
+            {
+                foreach (ControllerInfo controller in controllers)
+                {
+                    Logger.AddMessage(new LogMessage(
+                        $"Controller {controller.Name}, " +
+                        $"ID {controller.SystemId}, " +
+                        $"IP {controller.IPAddress}",
+                        "MotionLinker"));
+                }
+            }
+
+            #endregion
+
+            #region  Search for candidate RobotStudio target controllers
+
+            if (_logging)
+            {
+                Logger.AddMessage(new LogMessage(
+                    "Starting RobotStudio controller discovery",
+                    "MotionLinker"));
+            }
+
             Station station = Station.ActiveStation;
-            RsIrc5ControllerCollection RsControllers = station.Irc5Controllers;
+            RsIrc5ControllerCollection rsControllers = station.Irc5Controllers;
 
-            if (RsControllers.Count > 0)
+            if (rsControllers.Count == 0)
             {
-                foreach (RsIrc5Controller rsctrl in RsControllers)
-                {
-                    if (_logging) Logger.AddMessage(new LogMessage($"Controlador RobotStudio {rsctrl.Name}, ID {rsctrl.SystemId.ToLower()} en proyecto {rsctrl.ContainingProject}", "MotionLinker"));
-                }
-            }
-            else
-            {
-                Logger.AddMessage(new LogMessage("RobotStudio controllers not found", "MotionLinker", LogMessageSeverity.Error));
+                Logger.AddMessage(new LogMessage(
+                    "No RobotStudio controllers found.",
+                    "MotionLinker",
+                    LogMessageSeverity.Error));
+
                 return;
             }
-            #endregion
 
-            #region Buscar coincidencias controlador source en controladores reales
-            // En caso de haber varios se conecta con el primero
-            Controller srcCtrl = null;
-            foreach (ControllerInfo ctrl in controllers)
+            // Log discovered RobotStudio controllers
+            if (_logging)
             {
-                if (ctrl.SystemName == ctrlSource)
+                foreach (RsIrc5Controller controller in rsControllers)
                 {
-                    srcCtrl = ControllerHelper.ConnectController(ctrl);
-                    if (srcCtrl is null)
-                    {
-                        // Controlador encontrado, fallo en conexion
-                        return;
-                    }
-                    else
-                    {
-                        // Se termina la busqueda aunque haya mas coincidencias
-                        break;
-                    }
+                    Logger.AddMessage(new LogMessage(
+                        $"RobotStudio controller {controller.Name}, " +
+                        $"ID {controller.SystemId.ToLower()}, " +
+                        $"Project {controller.ContainingProject}",
+                        "MotionLinker"));
                 }
             }
 
-            // Nombre controlador no encontrado
-            if (srcCtrl is null)
-            {
-                Logger.AddMessage(new LogMessage($"Controller {ctrlSource} not found", "MotionLinker",
-                    LogMessageSeverity.Error));
-                return;            
-            }
-            else
-            {
-                Logger.AddMessage(new LogMessage($"Controller {srcCtrl.SystemName} with ID {srcCtrl.SystemId} assigned as source controller", "MotionLinker",
-                    LogMessageSeverity.Information));
-            }
             #endregion
 
-            #region Buscar coincidencias controlador target en controladores virtuales
-            // En caso de haber varios se conecta con el primero
-            RsIrc5Controller tgtRsCtrl = null;
-            foreach (RsIrc5Controller rsctrl in RsControllers)
+            #region Search matching source controller
+
+            // If multiple matching controllers exist,
+            // the first successful connection is used.
+            Controller sourceController = null;
+
+            foreach (ControllerInfo controller in controllers)
             {
-                if (rsctrl.Name == ctrlTarget)
-                {
-                    tgtRsCtrl = rsctrl;
-                    
-                    // Se termina la busqueda aunque haya mas coincidencias
-                    break;
-                }
+                if (controller.SystemName != sourceControllerName)
+                    continue;
+
+                sourceController =
+                    ControllerHelper.ConnectController(controller);
+
+                // Matching controller found but connection failed
+                if (sourceController == null)
+                    return;
+
+                // Stop searching after first successful match
+                break;
             }
-            // Nombre controlador no encontrado
-            if (tgtRsCtrl is null)
+
+            if (sourceController == null)
             {
-                Logger.AddMessage(new LogMessage($"Controller {ctrlTarget} not found", "MotionLinker",
+                Logger.AddMessage(new LogMessage(
+                    $"Controller '{sourceControllerName}' not found.",
+                    "MotionLinker",
                     LogMessageSeverity.Error));
-                srcCtrl?.Dispose();
+
                 return;
             }
-            else
-            {
-                Logger.AddMessage(new LogMessage($"Controller {tgtRsCtrl.Name} with ID {tgtRsCtrl.SystemId.ToLower()} assigned as target controller",
-                     "MotionLinker", LogMessageSeverity.Information));
-            }
+
+            Logger.AddMessage(new LogMessage(
+                $"Controller '{sourceController.SystemName}' " +
+                $"(ID: {sourceController.SystemId}) assigned as source controller.",
+                "MotionLinker",
+                LogMessageSeverity.Information));
+
             #endregion
 
-            #region Crear MechanismData y guardar en StateCache
+            #region Search matching target RobotStudio controller
+
+            // If multiple matching controllers exist,
+            // the first match is used.
+            RsIrc5Controller targetController = null;
+
+            foreach (RsIrc5Controller controller in rsControllers)
+            {
+                if (controller.Name != targetControllerName)
+                    continue;
+
+                targetController = controller;
+
+                // Stop searching after first match
+                break;
+            }
+
+            if (targetController == null)
+            {
+                Logger.AddMessage(new LogMessage(
+                    $"Controller '{targetControllerName}' not found.",
+                    "MotionLinker",
+                    LogMessageSeverity.Error));
+
+                sourceController?.Dispose();
+
+                return;
+            }
+
+            Logger.AddMessage(new LogMessage(
+                $"Controller '{targetController.Name}' " +
+                $"(ID: {targetController.SystemId}) " +
+                $"assigned as target controller.",
+                "MotionLinker",
+                LogMessageSeverity.Information));
+
+            #endregion
+
+            #region Create and initialize MechanismData
+
             MechanismData mechData = null;
 
             try
             {
                 mechData = new MechanismData(
-                    srcCtrl,
-                    tgtRsCtrl,
+                    sourceController,
+                    targetController,
                     twinControllers,
                     coordinatedWObjs,
-                    cartesian ? SyncMode.Cartesian : SyncMode.Joint);
+                    cartesian
+                        ? SyncMode.Cartesian
+                        : SyncMode.Joint);
 
-                // Datos rapid del controlado fuente
+                // Initialize RAPID source data cache
                 mechData.InitRapidDataCache();
 
-                // Datos RobotStudio controlador objetivo
+                // Convert RAPID data into RobotStudio objects
                 mechData.InitRsDataCache();
 
-                // Añadir datos de tool y wobjdata a la estacion
+                // Add tool and work object data to the station
                 mechData.AddDataToStation();
 
                 component.StateCache["MechanismData"] = mechData;
@@ -245,27 +313,33 @@ namespace MotionLinker
             catch (Exception ex)
             {
                 mechData?.Dispose();
-                srcCtrl?.Dispose();
+                sourceController?.Dispose();
 
                 Logger.AddMessage(new LogMessage(
-                    $"MechanismData creation failed during construction or initialization: {ex.Message}",
+                    $"MechanismData initialization failed: {ex.Message}",
                     "MotionLinker",
                     LogMessageSeverity.Error));
 
                 return;
             }
+
             #endregion
         }
-        //
-        // Resumen:
-        //     Called when simulation is stopped.
-        //
-        // Parámetros:
-        //   component:
-        //     Simulated component.
+        /// <summary>
+        /// Releases MotionLinker resources when simulation stops.
+        /// </summary>
+        /// <param name="component">
+        /// Simulated Smart Component instance.
+        /// </param>
+        /// <remarks>
+        /// Disposes synchronization resources and clears the
+        /// component runtime state cache.
+        /// </remarks>
         public override void OnSimulationStop(SmartComponent component)
         {
-            Logger.AddMessage(new LogMessage("Simulation Stop", "MotionLinker"));
+            Logger.AddMessage(new LogMessage(
+                "Simulation stopped",
+                "MotionLinker"));
 
             if (component.StateCache.ContainsKey("MechanismData") &&
                 component.StateCache["MechanismData"] is MechanismData mechData)
@@ -275,157 +349,158 @@ namespace MotionLinker
 
             component.StateCache.Clear();
         }
-        //
-        // Resumen:
-        //     Called to determine the duration of the next time step during simulation.
-        //
-        // Parámetros:
-        //   component:
-        //     Simulated component.
-        //
-        //   previousTime:
-        //     Simulation time (in ms) for the previous step.
-        //
-        // Devuelve:
-        //     Returns the desired duration (in ms) of the next step, or 0 to use the default
-        //     duration.
-        public override double QuerySimulationStep(SmartComponent component, double previousTime)
-        {
-            return 0.0;
-        }
-        //
-        // Resumen:
-        //     Called after simulation steps to a new time.
-        //
-        // Parámetros:
-        //   component:
-        //     Simulated component.
-        //
-        //   simulationTime:
-        //     Time (in ms) for the current simulation step.
-        //
-        // Comentarios:
-        //     This method is called after the Virtual Controller time step and after robots
-        //     are moved. It is allowed to return null if the method executes synchronously.
+        /// <summary>
+        /// Executes synchronization logic at the end of each simulation step.
+        /// </summary>
+        /// <param name="component">
+        /// Simulated Smart Component instance.
+        /// </param>
+        /// <param name="simulationTime">
+        /// Current simulation time in milliseconds.
+        /// </param>
+        /// <remarks>
+        /// Updates the target mechanism using the active synchronization
+        /// mode and refreshes RobotStudio graphics.
+        /// </remarks>
         public override async Task OnSimulationStepEndAsync(SmartComponent component, double simulationTime)
         {
-            const double interval = 5000.0;
+            const double waitingLogInterval = 5000.0;
 
-            if (component.StateCache.ContainsKey("MechanismData") &&
-                component.StateCache["MechanismData"] is MechanismData mechData)
+            if (!(component.StateCache["MechanismData"] is MechanismData mechData))
+                return;
+
+            // Offline controllers may fail position queries before
+            // RAPID enters RUNNING state.
+            if (!mechData.FirstRunning &&
+                !mechData.TwinControllers)
             {
-                // Fallo consulta posicion con controladores offline
-                if (mechData.FirstRunning || mechData.TwinControllers)
+                // Avoid repeated log spam while waiting
+                if (simulationTime -
+                    (double)component.StateCache["lastTime"] >=
+                    waitingLogInterval)
                 {
-                    switch (mechData.ActiveSync)
-                    {
-                        case SyncMode.Joint:
-                            // Sincronismo por posicion de ejes
-                            try
-                            {
-                                mechData.SyncJoint();
-                            }
-                            catch (Exception ex)
-                            {
-                                Logger.AddMessage(new LogMessage($"SyncJoint Position error: {ex.Message}", "MotionLinker", LogMessageSeverity.Error));
-                                return;
-                            }
-                            break;
+                    component.StateCache["lastTime"] =
+                        simulationTime;
 
-                        case SyncMode.Cartesian:
-                            // Sincronismo por posicion cartesiana
-                            try
-                            {
-                                await mechData.SyncCartesianAsync(mechData.CoordinatedWObjs);
-                            }
-                            catch (Exception ex)
-                            {
-                                Logger.AddMessage(new LogMessage($"SyncCartesian Position error: {ex.Message}", "MotionLinker", LogMessageSeverity.Error));
-                                return;
-                            }
-                            break;
-                    }
-                    GraphicControl.UpdateAll();
+                    Logger.AddMessage(new LogMessage(
+                        "Waiting for first source controller execution.",
+                        "MotionLinker",
+                        LogMessageSeverity.Warning));
                 }
-                // Se evita un fallo entre controladores offline cuando el spurce no se ha movido ni una vez
-                else if (simulationTime - (double)component.StateCache["lastTime"] >= interval)
+
+                return;
+            }
+
+            try
+            {
+                switch (mechData.ActiveSync)
                 {
-                    component.StateCache["lastTime"] = simulationTime;
-                    Logger.AddMessage(new LogMessage($" Waiting for first running of controller source", "MotionLinker", LogMessageSeverity.Warning));
+                    case SyncMode.Joint:
+
+                        // Joint position synchronization
+                        mechData.SyncJoint();
+                        break;
+
+                    case SyncMode.Cartesian:
+
+                        // Cartesian position synchronization
+                        await mechData.SyncCartesianAsync(
+                            mechData.CoordinatedWObjs);
+
+                        break;
                 }
             }
-            else
+            catch (Exception ex)
             {
-                return;
+                Logger.AddMessage(new LogMessage(
+                    $"Synchronization error: {ex.Message}",
+                    "MotionLinker",
+                    LogMessageSeverity.Error));
             }
         }
         /// <summary>
-        /// Called during simulation.
+        /// Monitors simulation step timing during execution.
         /// </summary>
-        /// <param name="component"> Simulated component. </param>
-        /// <param name="simulationTime"> Time (in ms) for the current simulation step. </param>
-        /// <param name="previousTime"> Time (in ms) for the previous simulation step. </param>
+        /// <param name="component">
+        /// Simulated Smart Component instance.
+        /// </param>
+        /// <param name="simulationTime">
+        /// Current simulation time in milliseconds.
+        /// </param>
+        /// <param name="previousTime">
+        /// Previous simulation time in milliseconds.
+        /// </param>
         /// <remarks>
-        /// For this method to be called, the component must be marked with
-        /// simulate="true" in the xml file.
+        /// Used only for diagnostic purposes to measure the real time
+        /// elapsed between simulation steps.
         /// </remarks>
-        public override void OnSimulationStep(SmartComponent component, double simulationTime, double previousTime)
+        public override void OnSimulationStep(SmartComponent component,double simulationTime,double previousTime)
         {
+            var stepWatch =
+                (Stopwatch)component.StateCache["_stepWatch"];
 
-            Stopwatch _stepWatch = (Stopwatch)component.StateCache["_stepWatch"];
-            long _lastTick = (long)component.StateCache["_lastTick"];
-            bool _logging = (bool)component.StateCache["_logging"];
+            long lastTick =
+                (long)component.StateCache["_lastTick"];
 
-            long now = _stepWatch.ElapsedMilliseconds;
+            bool logging =
+                (bool)component.StateCache["_logging"];
 
-                long realDelta = now - _lastTick;
-                
-                if (_lastTick != 0 && _logging)
-                {
+            long currentTick = stepWatch.ElapsedMilliseconds;
+            long elapsedTime = currentTick - lastTick;
 
-                    Logger.AddMessage(
-                        new LogMessage(
-                            $"Tiempo real entre steps: {realDelta} ms",
-                            "MotionLinker"));
-                }
+            if (lastTick != 0 && logging)
+            {
+                Logger.AddMessage(new LogMessage(
+                    $"Real time between simulation steps: {elapsedTime} ms",
+                    "MotionLinker"));
+            }
 
-            component.StateCache["_lastTick"] = now;
+            component.StateCache["_lastTick"] = currentTick;
         }
-        //
-        // Resumen:
-        //     Called to retrieve the actual value of a property attribute with the dummy value
-        //     '?'.
-        //
-        // Parámetros:
-        //   component:
-        //     Component that owns the property.
-        //
-        //   owningProperty:
-        //     Property that owns the attribute.
-        //
-        //   attributeName:
-        //     Name of the attribute to query.
-        //
-        // Devuelve:
-        //     Value of the attribute.        
+        /// <summary>
+        /// Provides dynamic property values for Smart Component properties.
+        /// </summary>
+        /// <param name="component">
+        /// Smart Component instance requesting the value.
+        /// </param>
+        /// <param name="owningProperty">
+        /// Property requesting the attribute value.
+        /// </param>
+        /// <param name="attributeName">
+        /// Requested attribute name.
+        /// </param>
+        /// <returns>
+        /// Returns a dynamic attribute value or delegates to the base implementation.
+        /// </returns>
+        /// <remarks>
+        /// Populates controller selection lists at runtime based on
+        /// available real and virtual controllers.
+        /// </remarks>     
         public override string QueryPropertyAttributeValue(SmartComponent component,DynamicProperty owningProperty,string attributeName)
         {
-            if (owningProperty.Name == "SourceController" &&
-                attributeName == "AllowedValues")
+
+            if (attributeName != "AllowedValues")
             {
-                // Los controladores source pueden ser offline u online
-                if ((bool)component.Properties["OnlineSource"].Value)
-                {
-                    return ControllerHelper.SearchSystemNames(NetworkScannerSearchCriterias.Real);
-                }
-                else
-                {
-                    return ControllerHelper.SearchSystemNames();
-                }
+                return base.QueryPropertyAttributeValue(
+                    component,
+                    owningProperty,
+                    attributeName);
             }
-            else if (owningProperty.Name == "TargetController")
+
+            // Source controller may be online or offline
+            if (owningProperty.Name == "SourceController")
             {
-                // Los controladores target siempre son offline
+                bool onlineSource =
+                    (bool)component.Properties["OnlineSource"].Value;
+
+                return onlineSource
+                    ? ControllerHelper.SearchSystemNames(NetworkScannerSearchCriterias.Real)
+                    : ControllerHelper.SearchSystemNames();
+            }
+
+            // Target controller must always be virtual
+            if (owningProperty.Name == "TargetController")
+            {
                 return ControllerHelper.SearchSystemNames(NetworkScannerSearchCriterias.Virtual);
             }
 
@@ -434,72 +509,87 @@ namespace MotionLinker
                 owningProperty,
                 attributeName);
         }
-        //
-        // Resumen:
-        //     Called when the value of a dynamic property changes.
-        //
-        // Parámetros:
-        //   component:
-        //     Component that owns the changed property.
-        //
-        //   changedProperty:
-        //     Changed property.
-        //
-        //   oldValue:
-        //     Previous value of the changed property.
-        public override void OnPropertyValueChanged(SmartComponent component, DynamicProperty changedProperty, object oldValue)
+        /// <summary>
+        /// Handles Smart Component property changes.
+        /// </summary>
+        /// <param name="component">
+        /// Smart Component instance owning the property.
+        /// </param>
+        /// <param name="changedProperty">
+        /// Property whose value changed.
+        /// </param>
+        /// <param name="oldValue">
+        /// Previous property value.
+        /// </param>
+        /// <remarks>
+        /// Supports runtime updates for synchronization settings and
+        /// refreshes dependent properties when required.
+        /// </remarks>
+        public override void OnPropertyValueChanged(SmartComponent component,DynamicProperty changedProperty,object oldValue)
         {
-            
-            if (changedProperty.Name == "OnlineSource")
+            string propertyName = changedProperty.Name;
+
+            if (propertyName == "OnlineSource")
             {
-                component.RaisePropertyChanged(component.Properties["SourceController"]);
+                component.RaisePropertyChanged(
+                    component.Properties["SourceController"]);
+
+                return;
             }
-            else if (changedProperty.Name == "Cartesian")
+
+            if (propertyName == "Cartesian")
             {
+                bool cartesian =
+                    Convert.ToBoolean(changedProperty.Value);
 
-                bool cartesian =  Convert.ToBoolean(changedProperty.Value);
-
-                // Cambio de modo en caliente
+                // Apply synchronization mode changes at runtime
                 if (component.StateCache.ContainsKey("MechanismData") &&
-                    component.StateCache["MechanismData"] is MechanismData mechData)
+                    component.StateCache["MechanismData"] is MechanismData mechanismData)
                 {
-                    SyncMode newMode = cartesian ? SyncMode.Cartesian : SyncMode.Joint;
-                    mechData.ActiveSync = newMode;
-                    mechData.DefaultSync = newMode;
+                    SyncMode newMode =
+                        cartesian
+                            ? SyncMode.Cartesian
+                            : SyncMode.Joint;
+
+                    mechanismData.ActiveSync = newMode;
+                    mechanismData.DefaultSync = newMode;
                 }
 
-                // En modo joint no tiene sentido que esta opcion este habilidata
-                if (cartesian)
-                {
-                    component.Properties["CoordinatedWObjs"].ReadOnly = false;
-                }
-                else
-                {
-                    component.Properties["CoordinatedWObjs"].ReadOnly = true;
-                }
+                // Coordinated WorkObjects are only valid
+                // in Cartesian synchronization mode
+                component.Properties["CoordinatedWObjs"].ReadOnly =
+                    !cartesian;
 
                 component.RaisePropertyChanged(
                     component.Properties["CoordinatedWObjs"]);
+
+                return;
             }
-            else if (changedProperty.Name == "CoordinatedWObjs")
+
+            if (propertyName == "CoordinatedWObjs")
             {
+                bool coordinatedWorkObjects =
+                    Convert.ToBoolean(changedProperty.Value);
 
-                bool coordinateWObj = Convert.ToBoolean(changedProperty.Value);
-
-                // Cambio de modo en caliente
+                // Apply coordinated work object setting at runtime
                 if (component.StateCache.ContainsKey("MechanismData") &&
-                    component.StateCache["MechanismData"] is MechanismData mechData)
+                    component.StateCache["MechanismData"] is MechanismData mechanismData)
                 {
-
-                    mechData.CoordinatedWObjs = coordinateWObj;
-                    mechData.CoordinatedWObjs = coordinateWObj;
+                    mechanismData.CoordinatedWObjs =
+                        coordinatedWorkObjects;
                 }
+
+                return;
             }
 
-            // Solo la propiedad Cartesian permite cambios en caliente
-            if ((changedProperty.Name != "Cartesian" && changedProperty.Name != "CoordinatedWObjs") && Simulator.State!=SimulationState.Stopped && Simulator.State != SimulationState.Ready) 
+            // Only synchronization properties support runtime updates
+            if (Simulator.State != SimulationState.Stopped &&
+                Simulator.State != SimulationState.Ready)
             {
-                Logger.AddMessage(new LogMessage("Restart simulation to apply changes", "MotionLinker", LogMessageSeverity.Warning));
+                Logger.AddMessage(new LogMessage(
+                    "Restart simulation to apply changes.",
+                    "MotionLinker",
+                    LogMessageSeverity.Warning));
             }
         }
     }

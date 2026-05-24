@@ -12,6 +12,18 @@ using System.Linq;
 using ControllerTask = ABB.Robotics.Controllers.RapidDomain.Task;
 using Task = System.Threading.Tasks.Task;
 
+/// <summary>
+/// Manages synchronization between a source ABB controller and a
+/// target RobotStudio virtual controller.
+/// </summary>
+/// <remarks>
+/// Handles RAPID data caching, RobotStudio data conversion,
+/// tool/work object management and motion synchronization
+/// using Joint or Cartesian modes.
+/// 
+/// This class owns disposable resources and is responsible for
+/// subscribing and releasing controller-related events.
+/// </remarks>
 namespace MotionLinker
 {
     public class MechanismData : IDisposable
