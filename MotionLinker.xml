@@ -39,12 +39,7 @@
 					valueType="System.Boolean"
 					value="false"
 					description="Enable Cartesian linking instead of joint linking"/>
-
-				<DynamicProperty
-					name="CoordinatedWObjs"
-					valueType="System.Boolean"
-					value="false"
-					description="WorkObject coordinated with external mechanical units"/>				
+			
 			</Properties>
 			<Bindings>
 			</Bindings>

@@ -20,14 +20,6 @@
 - A configuración é necesaria para resolver a postura do robot
 - Validación adicional pendente con probas reais
 
-### TODO
-- Sincronizar cambios nos datos entre sourceController e targetController en sincronismo cartesaiano
-- Ver que pasa con ExternalAxis. En principio esta implementado pero os valores no son coeherentes
-- Cambio de modo en quente
-- Arreglo dispose mechdata (feo).
-- Pequeno desaxuste entre movemento e tool usado. Filtro.
-- Inicializacion de rsdatacache. ¿Modificase co primeiro evento de cambio de valor?
-
 ## [Unreleased] 10-05-2026
 
 ### Added
@@ -43,12 +35,6 @@
 ### Notes
 - Inicializacion de rsdatacache. ¿Modificase co primeiro evento de cambio de valor?
 - Probas con GetRobtarget(string tool, string wobj). Problemas de resolucion de nomes locales. Imposible determinar scope.
-
-### TODO
-- Lista desplegable con controladores activos
-- Cambio de modo en quente
-- Calidad de conexion
-- Optimizacion de refresco de graficos
 
 ## [Unreleased] 16-05-2026
 
@@ -67,16 +53,6 @@
 
 ### Notes
 
-### TODO
-- Optimizar conexion e busqueda
-- Calidad de conexion
-- Optimizacion de refresco de graficos
-- Visualizacion de tool e workobject en SyncJoint
-- Cambio de modo en quente
-- Permitir non pisar rswobj ou rstool, usar os que hai definidos anteriormente para probas de trayectoria
-- Marcar un rscontroller como "dummy"
-- Marcar un rscontroller como "usado"
-
 ## [Unreleased] 16-05-2026
 
 ### Added
@@ -91,17 +67,6 @@
 - Latencia SyncCartesian
 
 ### Notes
-
-### TODO
-- Optimizar conexion e busqueda
-- Calidad de conexion
-- Optimizacion de refresco de graficos
-- Cambio de modo en quente
-- Permitir non pisar rswobj ou rstool, usar os que hai definidos anteriormente para probas de trayectoria
-- Marcar un rscontroller como "dummy"
-- Marcar un rscontroller como "usado"
-- Opcion sin datos locales. Sin datos locales se puede reducir la latencia de CartesianSync
-
 
 ## [Unreleased] 24-05-2026
 
@@ -124,11 +89,65 @@
 - IK en pruebas
 - Posible eliminacion propieaded CooridnatedWObjs: Uso sobrecarga IK con RsWorkObject
 
+## [Unreleased] 31-05-2026
+
+### Added
+- Novo campo privado (controller)_targetController 
+- Implementacion novo campo: conexion/desconexion e constructor de MechanismData 
+
+### Changed
+- Renombrado campo privado (Irc5Controller)_targetController a _targetRsController 
+
+### Fixed
+
+### Notes
+- Cambios readme
+	- Robot target no ejecuta
+	- Si se conectan 2 sources al mismo target se vuelve loco
+
+## [Unreleased] 02-06-2026
+
+### Added
+- Novo campo privado (ControllerSimulationConfiguration) _ControllerSimConfig
+- Evento OnLoad
+- Suscriptores ProjectOnLoad e ProjectClosed (funcionamento comprobado)
+
+### Changed
+- Objecto estacion en StateCache
+- Station y SimConfig añadido a StateCache
+- Eliminada propiedad CoordinateWobj
+
+### Fixed
+
+### Notes
+- Problema StateCache no se comparte cuando se edita desde OnLoad (station e project inda non estan creados)
+- Todos los controladores virtuales estan configurados para no arrancar en el inicio de la simulacion, solo se arranca el source si es virtual
+- Asi mismo se para el source al finalizar la simulacion
+
+## [Unreleased] 13-06-2026
+
+### Added
+
+### Changed
+- Eliminada propiedad CoordinateWobj
+- Gif de readme
+
+### Fixed
+- AutoStop y AutoStart modificados en BeforeStartSimulation y OnPropertyValueChangue respectivamente
+- AutoStop se mantiene persistente en OnSimulationStop
+
+### Notes
+- Se guarda un backup de la estacion en la carpeta del proyecto
+
+---
+
 ### TODO
+- Marcar un rscontroller como "usado"
+- Marcar un rscontroller como "dummy"
+- Revisar fallo robots delta en cartesiano 
 - Optimizar conexion e busqueda
 - Calidad de conexion
 - Permitir non pisar rswobj ou rstool, usar os que hai definidos anteriormente para probas de trayectoria
-- Marcar un rscontroller como "dummy"
-- Marcar un rscontroller como "usado"
 - Opcion sin datos locales. Sin datos locales se puede reducir la latencia de CartesianSync
-
+- Cambiar visibilidad de tool/wobj solo cuando cambia valor
+- Excepcion: Perdida de conexion controlador despois de conectar

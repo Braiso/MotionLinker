@@ -1,7 +1,9 @@
 ﻿bin/
 obj/
+snippet/
 *.user
 *.cache
 *.log
 .vs/
 changelog.md
+RobotStudioSDK.rspag

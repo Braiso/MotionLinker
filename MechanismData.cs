@@ -1,4 +1,5 @@
 ﻿using ABB.Robotics.Controllers;
+using ABB.Robotics.Controllers.FileSystemDomain;
 using ABB.Robotics.Controllers.MotionDomain;
 using ABB.Robotics.Controllers.RapidDomain;
 using ABB.Robotics.Math;
@@ -7,8 +8,14 @@ using ABB.Robotics.RobotStudio.Stations;
 using RobotStudio.API.Internal;
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
+using System.Runtime.CompilerServices;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
 using ControllerTask = ABB.Robotics.Controllers.RapidDomain.Task;
 using Task = System.Threading.Tasks.Task;
 
@@ -32,9 +39,9 @@ namespace MotionLinker
         #region Source controller resources
 
         // Source controller and motion references
-        private Controller _sourceController;
+        public Controller _sourceController { get; private set; }
         private MechanicalUnit _mechUnit;
-        private ControllerTask _sourceTask;
+        public ControllerTask _sourceTask { get; private set; }
 
         // Cached RAPID data from source controller
         private Dictionary<string, RapidData> _sourceTools;
@@ -45,9 +52,10 @@ namespace MotionLinker
         #region Target controller resources
 
         // Virtual controller and mechanism references
-        private RsIrc5Controller _targetController;
+        public RsIrc5Controller _targetRsController { get; private set; }
         private Mechanism _virtualMechanism;
-        private RsTask _targetTask;
+        private RsTask _targetRsTask;
+        private ControllerSimulationConfiguration _ControllerSimConfig;
 
         // RobotStudio converted data cache
         private Dictionary<string, RsToolData> _targetTools;
@@ -65,7 +73,7 @@ namespace MotionLinker
         private bool _disposedValue;
 
         // Performance monitoring
-        private int _maxLatency = 50;
+        private int _maxLatency = 500;
 
         // Consecutive inverse kinematics failures
         private int _ikFailCount = 0;
@@ -84,11 +92,6 @@ namespace MotionLinker
         /// Indicates whether source and target controllers share the same system name.
         /// </summary>
         public bool TwinControllers { get; private set; }
-
-        /// <summary>
-        /// Indicates whether coordinated WorkObjects with external mechanical units are enabled.
-        /// </summary>
-        public bool CoordinatedWObjs { get; set; }
 
         /// <summary>
         /// Current synchronization mode in use.
@@ -110,7 +113,7 @@ namespace MotionLinker
         /// <param name="sourceController">
         /// Source ABB controller used to retrieve motion and RAPID data.
         /// </param>
-        /// <param name="targetController">
+        /// <param name="targetRsController">
         /// Target RobotStudio virtual controller used for synchronization.
         /// </param>
         /// <param name="twinControllers">
@@ -130,19 +133,17 @@ namespace MotionLinker
         /// </exception>
         public MechanismData(
             Controller sourceController,
-            RsIrc5Controller targetController,
+            RsIrc5Controller targetRsController,
             bool twinControllers,
-            bool coordinatedWObjs,
             SyncMode sync)
         {
             _sourceController = sourceController ?? throw new ArgumentNullException(nameof(sourceController));
             _mechUnit = _sourceController.MotionSystem.MechanicalUnits[0];
             _sourceTask = _sourceController.Rapid.GetTask("T_ROB1") ?? throw new InvalidOperationException("Task T_ROB1 not found");
-            _targetController = targetController ?? throw new ArgumentNullException(nameof(targetController));
-            _virtualMechanism = _targetController.MechanicalUnits[0].Mechanism;
-            _targetTask = _targetController.Tasks["T_ROB1"] ?? throw new InvalidOperationException("rsTask T_ROB1 not found");
+            _targetRsController = targetRsController ?? throw new ArgumentNullException(nameof(targetRsController));
+            _virtualMechanism = _targetRsController.MechanicalUnits[0].Mechanism;
+            _targetRsTask = _targetRsController.Tasks["T_ROB1"] ?? throw new InvalidOperationException("rsTask T_ROB1 not found");
             TwinControllers = twinControllers;
-            CoordinatedWObjs = coordinatedWObjs;
             ActiveSync = sync;
             DefaultSync = sync;
 
@@ -465,13 +466,13 @@ namespace MotionLinker
                 if (tool.Name.Equals("tool0", StringComparison.OrdinalIgnoreCase))
                     continue;
 
-                var existing = _targetTask.FindDataDeclarationFromModuleScope(
+                var existing = _targetRsTask.FindDataDeclarationFromModuleScope(
                     tool.Name,
                     tool.ModuleName);
 
                 if (existing != null)
                 {
-                    _targetTask.DataDeclarations.Remove(existing);
+                    _targetRsTask.DataDeclarations.Remove(existing);
                 }
             }
 
@@ -491,13 +492,13 @@ namespace MotionLinker
                 if (wobj.Name.Equals("wobj0", StringComparison.OrdinalIgnoreCase))
                     continue;
 
-                var existing = _targetTask.FindDataDeclarationFromModuleScope(
+                var existing = _targetRsTask.FindDataDeclarationFromModuleScope(
                     wobj.Name,
                     wobj.ModuleName);
 
                 if (existing != null)
                 {
-                    _targetTask.DataDeclarations.Remove(existing);
+                    _targetRsTask.DataDeclarations.Remove(existing);
                 }
             }
         }
@@ -616,6 +617,16 @@ namespace MotionLinker
                 }
             }
         }
+        public void SimConfiguration(Station station,SmartComponent component)
+        {
+
+            // Configurar simulacion
+            SimulationConfiguration simConfig = station.SimulationConfigurations[0];
+            _ControllerSimConfig = simConfig.ControllerConfigurations[_targetRsController];
+            _ControllerSimConfig.AutoStopSimulation = true;
+            _ControllerSimConfig.AutoStartProgram = true;
+
+        }
         /// <summary>
         /// Synchronizes the target mechanism using source controller joint values.
         /// </summary>
@@ -644,7 +655,6 @@ namespace MotionLinker
                 Globals.DegToRad(jointTarget.RobAx.Rax_5),
                 Globals.DegToRad(jointTarget.RobAx.Rax_6)
             };
-
 
             double[] activeJointValues = new double[_virtualMechanism.NumActiveJoints];
             Array.Copy(
@@ -706,7 +716,7 @@ namespace MotionLinker
         /// Thrown if the motion pointer is unavailable or inverse kinematics
         /// repeatedly fail.
         /// </exception>
-        public async Task SyncCartesianAsync(bool useCoordinatedWorkObject)
+        public async Task SyncCartesianAsync()
         {
 
             Stopwatch sw = Stopwatch.StartNew();
@@ -765,7 +775,8 @@ namespace MotionLinker
 
             double[] jointValues;
             
-            if (useCoordinatedWorkObject)
+            // Debug: posibility to change IK method
+            if (true)
             {
                 jointValues =
                     await _virtualMechanism.CalculateInverseKinematicsAsync(
@@ -778,8 +789,7 @@ namespace MotionLinker
             {
                 jointValues =
                     await _virtualMechanism.CalculateInverseKinematicsAsync(
-                        _targetWobjActive.UserFrame.Matrix.Multiply(
-                            currentTarget.Frame.Matrix),
+                        _targetWobjActive.UserFrame.Matrix.Multiply(currentTarget.Frame.Matrix),
                         _targetToolActive.Frame.Matrix,
                         false);
             }
@@ -951,12 +961,12 @@ namespace MotionLinker
                     continue;
                 }
 
-                var existing = _targetTask.FindDataDeclarationFromModuleScope(tool.Name, tool.ModuleName);
+                var existing = _targetRsTask.FindDataDeclarationFromModuleScope(tool.Name, tool.ModuleName);
                 if (existing != null)
                 {
-                    _targetTask.DataDeclarations.Remove(existing);
+                    _targetRsTask.DataDeclarations.Remove(existing);
                 }
-                _targetTask.DataDeclarations.Add(tool);
+                _targetRsTask.DataDeclarations.Add(tool);
             }
 
             // Add work objects
@@ -979,12 +989,12 @@ namespace MotionLinker
                     continue;
                 }
 
-                var existing = _targetTask.FindDataDeclarationFromModuleScope(wobj.Name, wobj.ModuleName);
+                var existing = _targetRsTask.FindDataDeclarationFromModuleScope(wobj.Name, wobj.ModuleName);
                 if (existing != null)
                 {
-                    _targetTask.DataDeclarations.Remove(existing);
+                    _targetRsTask.DataDeclarations.Remove(existing);
                 }
-                _targetTask.DataDeclarations.Add(wobj);
+                _targetRsTask.DataDeclarations.Add(wobj);
             }
         }
         /// <summary>

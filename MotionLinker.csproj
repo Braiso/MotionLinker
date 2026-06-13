@@ -94,20 +94,24 @@
     <Compile Include="ControllerHelper.cs" />
     <Compile Include="MechanismData.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
+    <Compile Include="snippet\Class1.cs" />
   </ItemGroup>
   <ItemGroup>
     <None Include="app.config" />
-    <None Include="docs\arquitecture.md" />
+    <None Include="docs\architecture.md" />
     <None Include="docs\readme.md" />
+    <None Include="docs\StateCache.md" />
     <None Include="MotionLinker.xml" />
     <None Include="MotionLinker.en.xml" />
     <None Include="MotionLinker.png" />
     <None Include="packages.config" />
     <None Include="changelog.md" />
+    <None Include="snippet\LinkerModule.mod" />
   </ItemGroup>
   <ItemGroup>
     <Content Include=".gitignore" />
     <Content Include="docs\assets\MotionLinker.gif" />
+    <Content Include="snippet\SimConfiguration.txt" />
   </ItemGroup>
   <ItemGroup />
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />

@@ -11,8 +11,6 @@
 		<DynamicProperty name="TargetController"/>
 
 		<DynamicProperty name="Cartesian"/>
-		
-		<DynamicProperty name="CoordinatedWObjs"/>
 
 	</SmartComponent>
 </LibraryResource>

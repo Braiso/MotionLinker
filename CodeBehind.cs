@@ -21,6 +21,62 @@ namespace MotionLinker
     /// </remarks>
     public class CodeBehind : SmartComponentCodeBehind
     {
+        // En caso de ser varias instancias (singleton) solo se suscribe una vez
+        private static bool _projectEventsRegistered;
+
+        /// <summary>
+        /// Called when the Smart Component is loaded.
+        /// </summary>
+        /// <param name="component">
+        /// Smart Component instance.
+        /// </param>
+        /// <remarks>
+        /// Used only to register the simulation startup event.
+        /// MotionLinker initialization is deferred until the
+        /// simulation starts because component properties may
+        /// not yet be available at load time.
+        /// </remarks>
+        public override void OnLoad(SmartComponent component)
+        {
+
+            Logger.AddMessage(new LogMessage($"Component MotionLinker: {component.UniqueId} loaded", "MotionLinker", LogMessageSeverity.Information));
+
+            // Prevent duplicate event subscriptions when multiple MotionLinker Smart Components are present.
+            if (!_projectEventsRegistered)
+            {
+                Simulator.Starting += BeforeSimulationStarted;
+                _projectEventsRegistered = true;
+            }
+            base.OnLoad(component);
+        }
+        /// <summary>
+        /// Configures controller simulation settings before startup.
+        /// </summary>
+        /// <param name="sender">
+        /// Event sender.
+        /// </param>
+        /// <param name="e">
+        /// Event arguments.
+        /// </param>
+        /// <remarks>
+        /// Disables automatic simulation stop for all controllers
+        /// to ensure that motion synchronization remains active
+        /// even when no RAPID program is running.
+        /// </remarks>
+        public void BeforeSimulationStarted (object sender, EventArgs e)
+        {
+            Station station = Station.ActiveStation;
+            SimulationConfiguration simConfig = station.SimulationConfigurations[0];
+            RsIrc5ControllerCollection controllers = station.Irc5Controllers;
+
+            // Prevent the simulation from stopping when no program is running.
+            foreach (RsIrc5Controller rsController in controllers)
+            {
+                ControllerSimulationConfiguration config = simConfig.ControllerConfigurations[rsController];
+                config.TaskConfigurations[rsController.Tasks["T_ROB1"]].Active = true;
+                config.AutoStopSimulation = false;
+            }
+        }
         /// <summary>
         /// Initializes MotionLinker when simulation starts.
         /// </summary>
@@ -35,8 +91,6 @@ namespace MotionLinker
         public override void OnSimulationStart(SmartComponent component)
         {
 
-            // Initialize runtime state cache
-            component.StateCache.Clear();
             component.StateCache["_logging"] = false;
             component.StateCache["_stepWatch"] = Stopwatch.StartNew();
             component.StateCache["_lastTick"] = 0L;
@@ -55,7 +109,6 @@ namespace MotionLinker
 
             // Synchronization mode settings
             bool cartesian;
-            bool coordinatedWObjs;
 
             try
             {
@@ -63,9 +116,6 @@ namespace MotionLinker
                     Convert.ToBoolean(
                         component.Properties["Cartesian"].Value);
 
-                coordinatedWObjs =
-                    Convert.ToBoolean(
-                        component.Properties["CoordinatedWObjs"].Value);
             }
             catch (Exception ex)
             {
@@ -215,8 +265,7 @@ namespace MotionLinker
                 if (controller.SystemName != sourceControllerName)
                     continue;
 
-                sourceController =
-                    ControllerHelper.ConnectController(controller);
+                sourceController = ControllerHelper.ConnectController(controller);
 
                 // Matching controller found but connection failed
                 if (sourceController == null)
@@ -248,20 +297,20 @@ namespace MotionLinker
 
             // If multiple matching controllers exist,
             // the first match is used.
-            RsIrc5Controller targetController = null;
+            RsIrc5Controller targetRsController = null;
 
             foreach (RsIrc5Controller controller in rsControllers)
             {
                 if (controller.Name != targetControllerName)
                     continue;
 
-                targetController = controller;
+                targetRsController = controller;
 
                 // Stop searching after first match
                 break;
             }
 
-            if (targetController == null)
+            if (targetRsController == null)
             {
                 Logger.AddMessage(new LogMessage(
                     $"Controller '{targetControllerName}' not found.",
@@ -274,8 +323,8 @@ namespace MotionLinker
             }
 
             Logger.AddMessage(new LogMessage(
-                $"Controller '{targetController.Name}' " +
-                $"(ID: {targetController.SystemId}) " +
+                $"Controller '{targetRsController.Name}' " +
+                $"(ID: {targetRsController.SystemId}) " +
                 $"assigned as target controller.",
                 "MotionLinker",
                 LogMessageSeverity.Information));
@@ -290,9 +339,8 @@ namespace MotionLinker
             {
                 mechData = new MechanismData(
                     sourceController,
-                    targetController,
+                    targetRsController,
                     twinControllers,
-                    coordinatedWObjs,
                     cartesian
                         ? SyncMode.Cartesian
                         : SyncMode.Joint);
@@ -306,8 +354,16 @@ namespace MotionLinker
                 // Add tool and work object data to the station
                 mechData.AddDataToStation();
 
+                // Editar configuraciones de simulacion y rapid de targer controller
+                mechData.SimConfiguration(station,component);
+
                 component.StateCache["MechanismData"] = mechData;
                 component.StateCache["lastTime"] = 0.0;
+                
+                Logger.AddMessage(new LogMessage(
+                    $"Motion synchronization established successfully.",
+                    "MotionLinker",
+                    LogMessageSeverity.Information));
 
             }
             catch (Exception ex)
@@ -337,13 +393,19 @@ namespace MotionLinker
         /// </remarks>
         public override void OnSimulationStop(SmartComponent component)
         {
-            Logger.AddMessage(new LogMessage(
-                "Simulation stopped",
-                "MotionLinker"));
+            Logger.AddMessage(new LogMessage("Motion synchronization stopped", "MotionLinker"));
 
             if (component.StateCache.ContainsKey("MechanismData") &&
-                component.StateCache["MechanismData"] is MechanismData mechData)
+            component.StateCache["MechanismData"] is MechanismData mechData)
             {
+                // Keep AutoStart disabled for the next simulation cycle.
+                Station station = Station.ActiveStation;
+                SimulationConfiguration simConfig = station.SimulationConfigurations[0];
+                ControllerSimulationConfiguration config;
+
+                config = simConfig.ControllerConfigurations[mechData._targetRsController];
+                config.AutoStartProgram = false;
+
                 mechData.Dispose();
             }
 
@@ -366,8 +428,13 @@ namespace MotionLinker
         {
             const double waitingLogInterval = 5000.0;
 
-            if (!(component.StateCache["MechanismData"] is MechanismData mechData))
+            // Avoids KeyNotFoundException if initialization failed.
+            // Also validates the type and casts the value to MechanismData.
+            if (!(component.StateCache.TryGetValue("MechanismData", out object obj) &&
+                  obj is MechanismData mechData))
+            {
                 return;
+            }
 
             // Offline controllers may fail position queries before
             // RAPID enters RUNNING state.
@@ -404,8 +471,7 @@ namespace MotionLinker
                     case SyncMode.Cartesian:
 
                         // Cartesian position synchronization
-                        await mechData.SyncCartesianAsync(
-                            mechData.CoordinatedWObjs);
+                        await mechData.SyncCartesianAsync();
 
                         break;
                 }
@@ -531,55 +597,55 @@ namespace MotionLinker
 
             if (propertyName == "OnlineSource")
             {
-                component.RaisePropertyChanged(
-                    component.Properties["SourceController"]);
-
+                component.RaisePropertyChanged(component.Properties["SourceController"]);
                 return;
             }
 
             if (propertyName == "Cartesian")
             {
-                bool cartesian =
-                    Convert.ToBoolean(changedProperty.Value);
+                bool cartesian =  Convert.ToBoolean(changedProperty.Value);
 
                 // Apply synchronization mode changes at runtime
                 if (component.StateCache.ContainsKey("MechanismData") &&
                     component.StateCache["MechanismData"] is MechanismData mechanismData)
                 {
-                    SyncMode newMode =
-                        cartesian
-                            ? SyncMode.Cartesian
-                            : SyncMode.Joint;
+                    SyncMode newMode = cartesian ? SyncMode.Cartesian : SyncMode.Joint;
 
                     mechanismData.ActiveSync = newMode;
                     mechanismData.DefaultSync = newMode;
                 }
 
-                // Coordinated WorkObjects are only valid
-                // in Cartesian synchronization mode
-                component.Properties["CoordinatedWObjs"].ReadOnly =
-                    !cartesian;
-
-                component.RaisePropertyChanged(
-                    component.Properties["CoordinatedWObjs"]);
-
                 return;
             }
 
-            if (propertyName == "CoordinatedWObjs")
+
+            // Disable AutoStart on the target controller to prevent conflicts
+            // between its own RAPID execution and MotionLinker synchronization.
+            if (propertyName == "TargetController")
             {
-                bool coordinatedWorkObjects =
-                    Convert.ToBoolean(changedProperty.Value);
+                string currentTarget = (string)changedProperty.Value;
+                string oldTarget = (string)oldValue;
 
-                // Apply coordinated work object setting at runtime
-                if (component.StateCache.ContainsKey("MechanismData") &&
-                    component.StateCache["MechanismData"] is MechanismData mechanismData)
+                Station station = Station.ActiveStation;
+                SimulationConfiguration simConfig = station.SimulationConfigurations[0];
+                RsIrc5ControllerCollection controllers = station.Irc5Controllers;
+                ControllerSimulationConfiguration config;
+
+                foreach (RsIrc5Controller rsController in controllers)
                 {
-                    mechanismData.CoordinatedWObjs =
-                        coordinatedWorkObjects;
+                    if (rsController.Name == oldTarget)
+                    {
+                        // Restore default behavior for the previously selected target.
+                        config = simConfig.ControllerConfigurations[rsController];
+                        config.AutoStartProgram = true;
+                    }
+                    else if (rsController.Name == currentTarget)
+                    {
+                        // Prevent automatic program start on the current target.
+                        config = simConfig.ControllerConfigurations[rsController];
+                        config.AutoStartProgram = false;
+                    }
                 }
-
-                return;
             }
 
             // Only synchronization properties support runtime updates
