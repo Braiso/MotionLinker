@@ -53,10 +53,10 @@
 					description="Overwrite existing tools in the station of target controller station before synchronization starts"/>
 
 				<DynamicProperty
-					name="RetainStationData"
+					name="TemporalStationData"
 					valueType="System.Boolean"
 					value="true"
-					description="Keep the imported tool and work object data in the RobotStudio station after synchronization stops"/>
+					description="Remove imported tool and work object data from the RobotStudio station when the simulation stops"/>
 
 			</Properties>
 			<Bindings>

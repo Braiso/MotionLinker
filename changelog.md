@@ -151,9 +151,12 @@
 - Eliminado SafeDispose() 
 - AddRapidDataToCache: se quita suscripcion evento OnValueChangued con _overwrite
 - InitRsDataCache: se coge todos los tools y wobj que haya en la estacion
+- MechanismData: se añaden los campos: _overwriteWobj, _overwriteTool y TemporalStationData
+- Eliminado SimConfiguration. Solo se modifica el AutoStart del TargetController cuando se selecciona el resto hay que revisarlo
 
 ### Fixed
 - Meter documento StateCache en .gitignore
+- Documentar: AddRapidDataToCache
 
 ### Notes
 - AutoStart a true en SourceController no compensa. Limitacion autostart. Revisar antes de arrancar simulacion.
@@ -161,11 +164,11 @@
 ---
 
 ### TODO
-- Documentar: SimConfiguration, AddRapidDataToCache
+
 - Actualizar README
 - Guardar targerController y sourceController COMO CONTROLLERINFO cuando se cambia de valor la propiedad
 - Excepcion: Perdida de conexion controlador despois de conectar
 - Marcar un rscontroller como "usado"
 - Marcar un rscontroller como "dummy"
 - Metricas de Calidad de conexion
-- Opcion sin datos locales. Sin datos locales se puede reducir la latencia de CartesianSync
+- Opcion sin datos locales: sin datos locales se puede reducir la latencia de CartesianSync

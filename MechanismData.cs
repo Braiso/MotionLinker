@@ -65,10 +65,10 @@ namespace MotionLinker
         private RsToolData _targetToolActive;
         private RsWorkObject _targetWobjActive;
 
-        // Target station properties
+        // Target station options
         private bool _overwriteWobj;
         private bool _overwriteTool;
-        public bool RetainStationData { get; set;}
+        public bool TemporalStationData { get; set;}
 
         #endregion
 
@@ -142,7 +142,7 @@ namespace MotionLinker
             bool twinControllers,
             bool overwriteWobj,
             bool overwriteTool,
-            bool retainStationData,
+            bool temporalStationData,
             SyncMode sync)
         {
             _sourceController = sourceController ?? throw new ArgumentNullException(nameof(sourceController));
@@ -153,7 +153,7 @@ namespace MotionLinker
             _targetRsTask = _targetRsController.Tasks["T_ROB1"] ?? throw new InvalidOperationException("rsTask T_ROB1 not found");
             _overwriteWobj = overwriteWobj;
             _overwriteTool = overwriteTool;
-            RetainStationData = retainStationData;
+            TemporalStationData = temporalStationData;
             TwinControllers = twinControllers;
             ActiveSync = sync;
             DefaultSync = sync;
@@ -611,7 +611,7 @@ namespace MotionLinker
                     // Skip unrelated symbol types
                     if (rapidData.RapidType == rapidType)
                     {
-                        // Subscribe to updates and cache object
+                        // Only subscribe when station data will be overwritten
                         if ((rapidType=="wobjdata" && _overwriteWobj) || (rapidType == "tooldata" && _overwriteTool))
                         {
                             rapidData.ValueChanged += OnValueChanged;
@@ -629,16 +629,6 @@ namespace MotionLinker
                         LogMessageSeverity.Warning));
                 }
             }
-        }
-        public void SimConfiguration(Station station,SmartComponent component)
-        {
-
-            // Configurar simulacion
-            SimulationConfiguration simConfig = station.SimulationConfigurations[0];
-            _ControllerSimConfig = simConfig.ControllerConfigurations[_targetRsController];
-            _ControllerSimConfig.AutoStopSimulation = true;
-            _ControllerSimConfig.AutoStartProgram = true;
-
         }
         /// <summary>
         /// Synchronizes the target mechanism using source controller joint values.
@@ -895,22 +885,21 @@ namespace MotionLinker
             _sourceWobjs = wobjs;
         }
         /// <summary>
-        /// Initializes RobotStudio tool and work object caches from
-        /// the source RAPID data cache.
+        /// Initializes the RobotStudio tool and work object caches used during synchronization.
         /// </summary>
         /// <remarks>
-        /// Converts cached RAPID ToolData and WobjData instances into
-        /// RobotStudio equivalents used during synchronization.
+        /// Tool and work object data are always created from the source RAPID controller.
+        /// If overwriting is disabled, existing RobotStudio data declarations with matching
+        /// names are reused instead. Missing declarations are kept from the source cache
+        /// and can be added to the station later.
         /// </remarks>
-        /// <exception cref="Exception">
-        /// Thrown if RAPID data conversion fails.
-        /// </exception>
         public void InitRsDataCache()
         {
 
             Dictionary<string, RsToolData> targetStationTools;
             Dictionary<string, RsWorkObject> targetStationWobjs;
 
+            // Always initialize the cache from the source controller
             _targetTools = _sourceTools.ToDictionary(
                 entry => entry.Key,
                 entry => ConvertToRsTool(entry.Key, (ToolData)entry.Value.Value));
@@ -919,7 +908,7 @@ namespace MotionLinker
                 entry => entry.Key,
                 entry => ConvertToRsWobj(entry.Key, (WobjData)entry.Value.Value));
 
-
+            // Reuse existing RobotStudio tooldata when overwriting is disabled
             if (!_overwriteTool)
             {
                 RsDataDeclaration[] toolDecl = _targetRsTask.FindDataDeclarationsByType(typeof(RsToolData));
@@ -936,6 +925,7 @@ namespace MotionLinker
                 }
             }
 
+            // Reuse existing RobotStudio workobjects when overwriting is disabled
             if (!_overwriteWobj) 
             {
                 RsDataDeclaration[] wobjDecl = _targetRsTask.FindDataDeclarationsByType(typeof(RsWorkObject));
@@ -1128,7 +1118,7 @@ namespace MotionLinker
             _disposedValue = true;
 
             // Remove dynamically created station data
-            if (!RetainStationData)
+            if (TemporalStationData)
             {
                 RemoveDataFromStation(); 
             }

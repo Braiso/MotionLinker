@@ -16,7 +16,7 @@
 		
 		<DynamicProperty name="OverwriteTooldata"/>
 		
-		<DynamicProperty name="RetainStationData"/>
+		<DynamicProperty name="TemporalStationData"/>
 
 	</SmartComponent>
 </LibraryResource>

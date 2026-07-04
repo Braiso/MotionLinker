@@ -7,7 +7,6 @@ MotionLinker is a RobotStudio Smart Component that synchronizes the motion of a 
 
 - Joint motion synchronization
 - Cartesian motion synchronization
-- Automatic switching between Joint and Cartesian modes depending on controller state
 - Automatic controller discovery
 - Support for online and offline controllers
 - Synchronization of global and local `tooldata` and `wobjdata` between Source and Target
@@ -25,12 +24,17 @@ MotionLinker is a RobotStudio Smart Component that synchronizes the motion of a 
 
 ## Configuration / Properties
 
+## Configuration / Properties
+
 | Property | Type | Description |
 |-----------|------:|-------------|
-| SourceController | String | Source controller |
-| TargetController | String | Target controller |
-| OnlineSource | Bool | Search only online controllers |
-| Cartesian | Bool | Enable Cartesian synchronization |
+| SourceController | String | System name of the source controller. |
+| OnlineSource | Bool | Restrict the source controller list to online controllers only. |
+| TargetController | String | System name of the target RobotStudio controller. |
+| Cartesian | Bool | Enable Cartesian synchronization instead of joint synchronization. |
+| OverwriteTools | Bool | Overwrite existing RobotStudio tool data with data from the source controller. |
+| OverwriteWobj | Bool | Overwrite existing RobotStudio work object data with data from the source controller. |
+| TemporaryStationData | Bool | Remove imported tool and work object data from the RobotStudio station when the simulation stops. |
 
 ## Quick Start
 
@@ -70,13 +74,15 @@ Users are responsible for ensuring that synchronization relationships are valid,
 
 ### ToolData and WorkObject Handling
 
-MotionLinker does not modify RAPID code, RAPID modules, or RAPID data in either the source or target controller.
+> [!IMPORTANT]
+> MotionLinker is **read-only** with respect to RAPID.
+> It does **not** modify RAPID code, RAPID modules, or RAPID data in either the source or target controller.
 
-To support visualization and kinematic calculations, MotionLinker creates temporary RobotStudio station objects based on the source controller's `tooldata` and `wobjdata` definitions. These objects exist only within the RobotStudio station and are removed when synchronization stops.
+To support visualization and kinematic calculations, MotionLinker creates RobotStudio station objects based on the source controller's `tooldata` and `wobjdata` definitions.
 
-If RobotStudio station objects with the same names already exist, they may be temporarily replaced while MotionLinker is active. When synchronization ends, the MotionLinker-generated objects are removed, which may also remove the original station objects that were replaced.
+If `OverwriteTools` or `OverwriteWobj` is enabled, MotionLinker uses the tool and work object definitions from the source controller during synchronization. Otherwise, existing RobotStudio station objects are reused whenever possible, and new objects are created only when no matching object exists.
 
-If this occurs, the original station objects can be restored by synchronizing the corresponding RAPID data from the controller back into the RobotStudio station.
+By default, imported objects are temporary and are removed when synchronization stops. This behavior can be changed with the `TemporaryStationData` property.
 
 RAPID code and RAPID data are never modified and always remain the authoritative source of information.
 

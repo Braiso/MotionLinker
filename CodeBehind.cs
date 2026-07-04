@@ -150,10 +150,10 @@ namespace MotionLinker
                 return;
             }
 
-            bool retainStationData;
+            bool temporalStationData;
             try
             {
-                retainStationData = Convert.ToBoolean(component.Properties["RetainStationData"].Value);
+                temporalStationData = Convert.ToBoolean(component.Properties["TemporalStationData"].Value);
             }
             catch (Exception ex)
             {
@@ -377,7 +377,7 @@ namespace MotionLinker
                     twinControllers,
                     overwriteWobj,
                     overwriteTool,
-                    retainStationData,
+                    temporalStationData,
                     cartesian
                         ? SyncMode.Cartesian
                         : SyncMode.Joint);
@@ -391,9 +391,7 @@ namespace MotionLinker
                 // Add tool and work object data to the station
                 mechData.AddDataToStation();
 
-                // Editar configuraciones de simulacion y rapid de targer controller
-                mechData.SimConfiguration(station,component);
-
+                // StateCache stores data specific to this Smart Component instance
                 component.StateCache["MechanismData"] = mechData;
                 component.StateCache["lastTime"] = 0.0;
                 
@@ -655,16 +653,16 @@ namespace MotionLinker
                 return;
             }
 
-            if (propertyName == "RetainStationData")
+            if (propertyName == "TemporalStationData")
             {
-                bool retainStationData = Convert.ToBoolean(changedProperty.Value);
+                bool temporalStationData = Convert.ToBoolean(changedProperty.Value);
 
                 // Apply synchronization mode changes at runtime
                 if (component.StateCache.ContainsKey("MechanismData") &&
                     component.StateCache["MechanismData"] is MechanismData mechanismData)
                 {
 
-                    mechanismData.RetainStationData = retainStationData;
+                    mechanismData.TemporalStationData = temporalStationData;
                 }
 
                 return;
