@@ -124,7 +124,7 @@
 - Todos los controladores virtuales estan configurados para no arrancar en el inicio de la simulacion, solo se arranca el source si es virtual
 - Asi mismo se para el source al finalizar la simulacion
 
-## [Unreleased] 13-06-2026
+## [1.0.0] 13-06-2026
 
 ### Added
 
@@ -139,15 +139,33 @@
 ### Notes
 - Se guarda un backup de la estacion en la carpeta del proyecto
 
+## [1.1.0] 30-06-2026
+
+### Added
+- MIT Licence
+- Propiedad overwrite tooldata
+- Propiedad overwrite wobjdata
+- Propiedad retain station data
+
+### Changed
+- Eliminado SafeDispose() 
+- AddRapidDataToCache: se quita suscripcion evento OnValueChangued con _overwrite
+- InitRsDataCache: se coge todos los tools y wobj que haya en la estacion
+
+### Fixed
+- Meter documento StateCache en .gitignore
+
+### Notes
+- AutoStart a true en SourceController no compensa. Limitacion autostart. Revisar antes de arrancar simulacion.
+
 ---
 
 ### TODO
+- Documentar: SimConfiguration, AddRapidDataToCache
+- Actualizar README
+- Guardar targerController y sourceController COMO CONTROLLERINFO cuando se cambia de valor la propiedad
+- Excepcion: Perdida de conexion controlador despois de conectar
 - Marcar un rscontroller como "usado"
 - Marcar un rscontroller como "dummy"
-- Revisar fallo robots delta en cartesiano 
-- Optimizar conexion e busqueda
-- Calidad de conexion
-- Permitir non pisar rswobj ou rstool, usar os que hai definidos anteriormente para probas de trayectoria
+- Metricas de Calidad de conexion
 - Opcion sin datos locales. Sin datos locales se puede reducir la latencia de CartesianSync
-- Cambiar visibilidad de tool/wobj solo cuando cambia valor
-- Excepcion: Perdida de conexion controlador despois de conectar

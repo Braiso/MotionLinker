@@ -6,11 +6,17 @@
 
 		<DynamicProperty name="SourceController"/>
 
-		<DynamicProperty name="Offline"/>
+		<DynamicProperty name="OnlineSource"/>
 
 		<DynamicProperty name="TargetController"/>
 
 		<DynamicProperty name="Cartesian"/>
+		
+		<DynamicProperty name="OverwriteWobjdata"/>
+		
+		<DynamicProperty name="OverwriteTooldata"/>
+		
+		<DynamicProperty name="RetainStationData"/>
 
 	</SmartComponent>
 </LibraryResource>

@@ -23,7 +23,6 @@ namespace MotionLinker
     {
         // En caso de ser varias instancias (singleton) solo se suscribe una vez
         private static bool _projectEventsRegistered;
-
         /// <summary>
         /// Called when the Smart Component is loaded.
         /// </summary>
@@ -63,7 +62,7 @@ namespace MotionLinker
         /// to ensure that motion synchronization remains active
         /// even when no RAPID program is running.
         /// </remarks>
-        public void BeforeSimulationStarted (object sender, EventArgs e)
+        public void BeforeSimulationStarted(object sender, EventArgs e)
         {
             Station station = Station.ActiveStation;
             SimulationConfiguration simConfig = station.SimulationConfigurations[0];
@@ -107,24 +106,61 @@ namespace MotionLinker
             // Target controller name
             string targetControllerName = component.Properties["TargetController"]?.Value as string;
 
-            // Synchronization mode settings
+            // Synchronization mode 
             bool cartesian;
-
             try
             {
-                cartesian =
-                    Convert.ToBoolean(
-                        component.Properties["Cartesian"].Value);
-
+                cartesian = Convert.ToBoolean(component.Properties["Cartesian"].Value);
             }
             catch (Exception ex)
             {
                 Logger.AddMessage(new LogMessage(
                     "Error reading component properties",
-                    ex.Message,
-                    "MotionLinker",
+                    ex.Message,"MotionLinker",
                     LogMessageSeverity.Error));
+                return;
+            }
 
+            // Station data options
+            bool overwriteWobj;
+            try
+            {
+                overwriteWobj = Convert.ToBoolean(component.Properties["OverwriteWobjdata"].Value);
+            }
+            catch (Exception ex)
+            {
+                Logger.AddMessage(new LogMessage(
+                    "Error reading component properties",
+                    ex.Message, "MotionLinker",
+                    LogMessageSeverity.Error));
+                return;
+            }
+
+            bool overwriteTool;
+            try
+            {
+                overwriteTool = Convert.ToBoolean(component.Properties["OverwriteTooldata"].Value);
+            }
+            catch (Exception ex)
+            {
+                Logger.AddMessage(new LogMessage(
+                    "Error reading component properties",
+                    ex.Message, "MotionLinker",
+                    LogMessageSeverity.Error));
+                return;
+            }
+
+            bool retainStationData;
+            try
+            {
+                retainStationData = Convert.ToBoolean(component.Properties["RetainStationData"].Value);
+            }
+            catch (Exception ex)
+            {
+                Logger.AddMessage(new LogMessage(
+                    "Error reading component properties",
+                    ex.Message, "MotionLinker",
+                    LogMessageSeverity.Error));
                 return;
             }
 
@@ -187,10 +223,8 @@ namespace MotionLinker
 
             // Twin controllers are assumed to be a real controller
             // paired with its virtual counterpart.
-            ControllerInfo[] controllers =
-                twinControllers
-                    ? scanner.GetControllers(NetworkScannerSearchCriterias.Real)
-                    : scanner.GetControllers();
+            ControllerInfo[] controllers = twinControllers  ? scanner.GetControllers(NetworkScannerSearchCriterias.Real)
+                                                            : scanner.GetControllers();
 
             if (controllers == null || controllers.Length == 0)
             {
@@ -341,6 +375,9 @@ namespace MotionLinker
                     sourceController,
                     targetRsController,
                     twinControllers,
+                    overwriteWobj,
+                    overwriteTool,
+                    retainStationData,
                     cartesian
                         ? SyncMode.Cartesian
                         : SyncMode.Joint);
@@ -618,6 +655,20 @@ namespace MotionLinker
                 return;
             }
 
+            if (propertyName == "RetainStationData")
+            {
+                bool retainStationData = Convert.ToBoolean(changedProperty.Value);
+
+                // Apply synchronization mode changes at runtime
+                if (component.StateCache.ContainsKey("MechanismData") &&
+                    component.StateCache["MechanismData"] is MechanismData mechanismData)
+                {
+
+                    mechanismData.RetainStationData = retainStationData;
+                }
+
+                return;
+            }
 
             // Disable AutoStart on the target controller to prevent conflicts
             // between its own RAPID execution and MotionLinker synchronization.
@@ -628,10 +679,10 @@ namespace MotionLinker
 
                 Station station = Station.ActiveStation;
                 SimulationConfiguration simConfig = station.SimulationConfigurations[0];
-                RsIrc5ControllerCollection controllers = station.Irc5Controllers;
+                RsIrc5ControllerCollection rsControllers = station.Irc5Controllers;
                 ControllerSimulationConfiguration config;
 
-                foreach (RsIrc5Controller rsController in controllers)
+                foreach (RsIrc5Controller rsController in rsControllers)
                 {
                     if (rsController.Name == oldTarget)
                     {

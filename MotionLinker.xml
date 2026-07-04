@@ -25,7 +25,7 @@
 					name="OnlineSource"
 					valueType="System.Boolean"
 					value="false"
-					description="True if the source controller is offline"/>
+					description="True if the source controller is a real controller"/>
 				
 				<DynamicProperty
 					name="TargetController"
@@ -39,7 +39,25 @@
 					valueType="System.Boolean"
 					value="false"
 					description="Enable Cartesian linking instead of joint linking"/>
-			
+
+				<DynamicProperty
+					name="OverwriteWobjdata"
+					valueType="System.Boolean"
+					value="true"
+					description="Overwrite existing work object in the target controller station before synchronization starts"/>
+
+				<DynamicProperty
+					name="OverwriteTooldata"
+					valueType="System.Boolean"
+					value="true"
+					description="Overwrite existing tools in the station of target controller station before synchronization starts"/>
+
+				<DynamicProperty
+					name="RetainStationData"
+					valueType="System.Boolean"
+					value="true"
+					description="Keep the imported tool and work object data in the RobotStudio station after synchronization stops"/>
+
 			</Properties>
 			<Bindings>
 			</Bindings>

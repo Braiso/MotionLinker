@@ -65,6 +65,11 @@ namespace MotionLinker
         private RsToolData _targetToolActive;
         private RsWorkObject _targetWobjActive;
 
+        // Target station properties
+        private bool _overwriteWobj;
+        private bool _overwriteTool;
+        public bool RetainStationData { get; set;}
+
         #endregion
 
         #region Internal state
@@ -135,6 +140,9 @@ namespace MotionLinker
             Controller sourceController,
             RsIrc5Controller targetRsController,
             bool twinControllers,
+            bool overwriteWobj,
+            bool overwriteTool,
+            bool retainStationData,
             SyncMode sync)
         {
             _sourceController = sourceController ?? throw new ArgumentNullException(nameof(sourceController));
@@ -143,6 +151,9 @@ namespace MotionLinker
             _targetRsController = targetRsController ?? throw new ArgumentNullException(nameof(targetRsController));
             _virtualMechanism = _targetRsController.MechanicalUnits[0].Mechanism;
             _targetRsTask = _targetRsController.Tasks["T_ROB1"] ?? throw new InvalidOperationException("rsTask T_ROB1 not found");
+            _overwriteWobj = overwriteWobj;
+            _overwriteTool = overwriteTool;
+            RetainStationData = retainStationData;
             TwinControllers = twinControllers;
             ActiveSync = sync;
             DefaultSync = sync;
@@ -586,9 +597,7 @@ namespace MotionLinker
         {
             foreach (var symbol in symbols)
             {
-                var rapidData = new RapidData(
-                    _sourceController,
-                    symbol);
+                var rapidData = new RapidData(_sourceController,symbol);
 
                 // Generate unique key for local/global symbols
                 string key =
@@ -603,7 +612,11 @@ namespace MotionLinker
                     if (rapidData.RapidType == rapidType)
                     {
                         // Subscribe to updates and cache object
-                        rapidData.ValueChanged += OnValueChanged;
+                        if ((rapidType=="wobjdata" && _overwriteWobj) || (rapidType == "tooldata" && _overwriteTool))
+                        {
+                            rapidData.ValueChanged += OnValueChanged;
+                        } 
+                     
                         cache.Add(key, rapidData);
                     }
                 }
@@ -864,27 +877,11 @@ namespace MotionLinker
             // Search each module independently
             foreach (Module module in _sourceTask.GetModules())
             {
-                RapidSymbol[] toolData =
-                    module.SearchRapidSymbol(
-                        sProp,
-                        "tooldata",
-                        string.Empty);
+                RapidSymbol[] toolData = module.SearchRapidSymbol(sProp,"tooldata",string.Empty);
+                RapidSymbol[] workObjData = module.SearchRapidSymbol(sProp,"wobjdata",string.Empty);
 
-                RapidSymbol[] workObjData =
-                    module.SearchRapidSymbol(
-                        sProp,
-                        "wobjdata",
-                        string.Empty);
-
-                AddRapidDataToCache(
-                    tools,
-                    toolData,
-                    "tooldata");
-
-                AddRapidDataToCache(
-                    wobjs,
-                    workObjData,
-                    "wobjdata");
+                AddRapidDataToCache(tools,toolData,"tooldata");
+                AddRapidDataToCache(wobjs,workObjData,"wobjdata");
             }
 
             // Validate and assign caches
@@ -910,25 +907,49 @@ namespace MotionLinker
         /// </exception>
         public void InitRsDataCache()
         {
-            try
-            {
-                _targetTools = _sourceTools.ToDictionary(
-                    entry => entry.Key,
-                    entry => ConvertToRsTool(
-                        entry.Key,
-                        (ToolData)entry.Value.Value));
 
-                _targetWobjs = _sourceWobjs.ToDictionary(
-                    entry => entry.Key,
-                    entry => ConvertToRsWobj(
-                        entry.Key,
-                        (WobjData)entry.Value.Value));
-            }
-            catch (Exception ex)
+            Dictionary<string, RsToolData> targetStationTools;
+            Dictionary<string, RsWorkObject> targetStationWobjs;
+
+            _targetTools = _sourceTools.ToDictionary(
+                entry => entry.Key,
+                entry => ConvertToRsTool(entry.Key, (ToolData)entry.Value.Value));
+
+            _targetWobjs = _sourceWobjs.ToDictionary(
+                entry => entry.Key,
+                entry => ConvertToRsWobj(entry.Key, (WobjData)entry.Value.Value));
+
+
+            if (!_overwriteTool)
             {
-                throw new Exception(
-                    "Failed to initialize RobotStudio data cache.",
-                    ex);
+                RsDataDeclaration[] toolDecl = _targetRsTask.FindDataDeclarationsByType(typeof(RsToolData));
+                targetStationTools = toolDecl.ToDictionary(
+                        tool => tool.Name,
+                        tool => (RsToolData)tool);
+
+                foreach (var key in _targetTools.Keys.ToList())
+                {
+                    if (targetStationTools.TryGetValue(key, out var tool))
+                    {
+                        _targetTools[key] = tool;
+                    }
+                }
+            }
+
+            if (!_overwriteWobj) 
+            {
+                RsDataDeclaration[] wobjDecl = _targetRsTask.FindDataDeclarationsByType(typeof(RsWorkObject));
+                targetStationWobjs = wobjDecl.ToDictionary(
+                        wobj => wobj.Name,
+                        wobj => (RsWorkObject)wobj);
+
+                foreach (var key in _targetWobjs.Keys.ToList())
+                {
+                    if (targetStationWobjs.TryGetValue(key, out var wobj))
+                    {
+                        _targetWobjs[key] = wobj;
+                    }
+                }
             }
         }
         /// <summary>
@@ -961,12 +982,13 @@ namespace MotionLinker
                     continue;
                 }
 
+                // Overwrite Tool implementation
                 var existing = _targetRsTask.FindDataDeclarationFromModuleScope(tool.Name, tool.ModuleName);
                 if (existing != null)
                 {
                     _targetRsTask.DataDeclarations.Remove(existing);
                 }
-                _targetRsTask.DataDeclarations.Add(tool);
+                _targetRsTask.DataDeclarations.Add(tool); 
             }
 
             // Add work objects
@@ -989,6 +1011,7 @@ namespace MotionLinker
                     continue;
                 }
 
+                // Overwrite Wobj implementation
                 var existing = _targetRsTask.FindDataDeclarationFromModuleScope(wobj.Name, wobj.ModuleName);
                 if (existing != null)
                 {
@@ -996,7 +1019,7 @@ namespace MotionLinker
                 }
                 _targetRsTask.DataDeclarations.Add(wobj);
             }
-        }
+        }        
         /// <summary>
         /// Handles controller operating mode changes and adjusts the
         /// synchronization strategy when required.
@@ -1102,22 +1125,28 @@ namespace MotionLinker
         {
             if (_disposedValue)
                 return;
+            _disposedValue = true;
 
             // Remove dynamically created station data
-            RemoveDataFromStation();
+            if (!RetainStationData)
+            {
+                RemoveDataFromStation(); 
+            }
 
             // Dispose source task
-            SafeDispose(() => _sourceTask.Dispose(), "Task.Dispose");
-            _sourceTask= null;
+            if (_sourceTask!=null) 
+            {
+                _sourceTask.Dispose();
+                _sourceTask = null;
+            }
 
             // Dispose RAPID tool cache
             if (_sourceTools != null)
             {
                 foreach (var item in _sourceTools.Values)
                 {
-
-                    SafeDispose(() => item.ValueChanged -= OnValueChanged, "Tools.OnValueChanged");
-                    SafeDispose(() => item.Dispose(), "Tools.Dispose");
+                    item.ValueChanged -= OnValueChanged;
+                    item.Dispose();
                 }
                 _sourceTools.Clear();
                 _sourceTools = null;
@@ -1128,9 +1157,8 @@ namespace MotionLinker
             {
                 foreach (var item in _sourceWobjs.Values)
                 {
-
-                    SafeDispose(() => item.ValueChanged -= OnValueChanged, "Wobjs.OnValueChanged");
-                    SafeDispose(() => item.Dispose(), "Wobjs.Dispose");
+                    item.ValueChanged -= OnValueChanged;
+                    item.Dispose();
                 }
                 _sourceWobjs.Clear();
                 _sourceWobjs = null;
@@ -1139,30 +1167,18 @@ namespace MotionLinker
             // Dispose mechanical unit
             if (_mechUnit != null)
             {
-                SafeDispose(
-                    () => _mechUnit.Dispose(),
-                    "MechanismUnit.Dispose");
+                _mechUnit.Dispose();
                 _mechUnit = null;
             }
 
             // Unsubscribe controller events and dispose controller
             if (_sourceController != null)
             {
-                SafeDispose(
-                    () => _sourceController.OperatingModeChanged -= OnOperatingModeChanged,
-                    "Controller.OperatingModeChanged");
-                
-                SafeDispose(
-                    () => _sourceController.Rapid.ExecutionStatusChanged -= OnExecutionChanged,
-                    "Rapid.ExecutionStatusChanged");
-
-                SafeDispose(
-                    () => _sourceController.Dispose(),
-                    "Controller.Dispose");
+                _sourceController.OperatingModeChanged -= OnOperatingModeChanged;
+                _sourceController.Rapid.ExecutionStatusChanged -= OnExecutionChanged;
+                _sourceController.Dispose();
                 _sourceController = null;
             }
-
-            _disposedValue = true;
         }
         /// <summary>
         /// Executes a cleanup operation and logs any exception
@@ -1174,20 +1190,6 @@ namespace MotionLinker
         /// <param name="name">
         /// Descriptive name of the resource being released.
         /// </param>
-        private void SafeDispose(Action action, string name)
-        {
-            try
-            {
-                action();
-            }
-            catch (Exception ex)
-            {
-                Logger.AddMessage(new LogMessage(
-                    $"Dispose error ({name}): {ex.Message}",
-                    "MotionLinker",
-                    LogMessageSeverity.Warning));
-            }
-        }
     }
     public enum SyncMode
     {

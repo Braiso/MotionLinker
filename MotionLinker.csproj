@@ -101,6 +101,7 @@
     <None Include="docs\architecture.md" />
     <None Include="docs\readme.md" />
     <None Include="docs\StateCache.md" />
+    <None Include="LICENSE.md" />
     <None Include="MotionLinker.xml" />
     <None Include="MotionLinker.en.xml" />
     <None Include="MotionLinker.png" />

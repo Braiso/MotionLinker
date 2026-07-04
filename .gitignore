@@ -1,9 +1,10 @@
-﻿bin/
+﻿.vs/
+bin/
 obj/
 snippet/
+docs/StateCache.md
 *.user
 *.cache
 *.log
-.vs/
 changelog.md
 RobotStudioSDK.rspag
